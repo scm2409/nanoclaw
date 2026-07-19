@@ -269,7 +269,7 @@ Two rules, no exceptions:
 
 ## Supply Chain Security (pnpm)
 
-This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspace.yaml`. New package versions must exist on the npm registry for 3 days before pnpm will resolve them.
+This project uses pnpm with `minimumReleaseAge: 10080` (7 days) in `pnpm-workspace.yaml`. New package versions must exist on the npm registry for 7 days before pnpm will resolve them.
 
 **Rules — do not bypass without explicit human approval:**
 - **`minimumReleaseAgeExclude`**: Never add entries without human sign-off. If a package must bypass the release age gate, the human must approve and the entry must pin the exact version being excluded (e.g. `package@1.2.3`), never a range.
