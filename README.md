@@ -1,3 +1,9 @@
+> [!NOTE]
+> **This is a vibecoded fork** of [nanocoai/nanoclaw](https://github.com/nanocoai/nanoclaw).
+> Changes here are written by [Claude Code](https://claude.com/claude-code) under
+> human direction and review. See **[FORK-CHANGELOG.md](FORK-CHANGELOG.md)** for what
+> this fork changed, why, and which model wrote each piece.
+
 <p align="center">
   <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
 </p>

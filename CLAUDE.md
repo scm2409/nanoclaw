@@ -13,6 +13,15 @@ If you are a fresh install (you ran `git clone`, not `git pull`) and there are n
 
 ---
 
+## Fork Changelog (this fork only)
+
+This is a vibecoded fork. Any fork-local change made in a session must be described in
+[FORK-CHANGELOG.md](FORK-CHANGELOG.md) before the session ends — never in upstream's
+`CHANGELOG.md`. Write the entry as part of the work, before asking to commit. See
+[docs/fork-changelog.md](docs/fork-changelog.md).
+
+---
+
 # NanoClaw
 
 Personal AI assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`.
