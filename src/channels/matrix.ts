@@ -106,6 +106,90 @@ function matrixIsVoiceAttachment(_att: Record<string, any>, raw: Record<string, 
 }
 
 /**
+ * Register a crypto encryptor for every joined room that has encryption
+ * enabled, so outbound messages can be encrypted regardless of how the
+ * client synced.
+ *
+ * matrix-js-sdk only registers a room's encryptor when the room's
+ * `m.room.encryption` state event arrives *inside a sync response*
+ * (sync.js → `cryptoCallbacks.onCryptoEvent`). An INCREMENTAL sync — which
+ * is what happens whenever a persisted sync snapshot is restored at startup
+ * — never re-sends unchanged state, so a room whose encryption was
+ * configured in some earlier process never gets an encryptor again. The
+ * room and its keys are all present; only the registration is missing, and
+ * every send into it then fails with "Cannot encrypt event in unconfigured
+ * room <id>".
+ *
+ * Confirmed in production on 2026-07-25: after a restart that restored a
+ * sync snapshot, the operator's live DM room could not be replied to at all
+ * — the agent's answer was generated, retried three times, and dropped.
+ *
+ * Room state itself IS restored from the snapshot, so the fix is to walk the
+ * restored rooms and drive the same callback the sync loop would have.
+ * Idempotent: `onCryptoEvent` updates an existing encryptor rather than
+ * duplicating it, so re-running this (or running it on a client that synced
+ * fully) is harmless.
+ *
+ * Best-effort by design — never throws. A failure here leaves exactly
+ * today's behavior, so it can't turn a working start into a broken one.
+ */
+export async function ensureEncryptorForRoom(
+  adapter: ReturnType<typeof createMatrixAdapter>,
+  roomId: string,
+): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = (adapter as any).client;
+    const crypto = client?.getCrypto?.();
+    if (!client || typeof crypto?.onCryptoEvent !== 'function') return;
+
+    // Already registered — nothing to do. Reading the backend's internal map
+    // keeps the common case free; if the field ever disappears we fall
+    // through to onCryptoEvent, which is idempotent anyway.
+    if (crypto.roomEncryptors?.[roomId]) return;
+
+    const room = client.getRoom?.(roomId);
+    const event = room?.currentState?.getStateEvents?.('m.room.encryption', '');
+    if (!room || !event) return;
+
+    await crypto.onCryptoEvent(room, event);
+    log.info('Matrix: registered missing room encryptor before send', { roomId });
+  } catch (err) {
+    log.warn('Matrix: could not ensure room encryptor', { roomId, err });
+  }
+}
+
+export async function ensureRoomEncryptors(adapter: ReturnType<typeof createMatrixAdapter>): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = (adapter as any).client;
+    const crypto = client?.getCrypto?.();
+    if (!client || typeof crypto?.onCryptoEvent !== 'function') {
+      log.debug('Matrix: skipping encryptor backfill (no crypto backend)');
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rooms: any[] = client.getRooms?.() ?? [];
+    let registered = 0;
+    for (const room of rooms) {
+      try {
+        if (room.getMyMembership?.() !== 'join') continue;
+        const event = room.currentState?.getStateEvents?.('m.room.encryption', '');
+        if (!event) continue;
+        await crypto.onCryptoEvent(room, event);
+        registered++;
+      } catch (err) {
+        log.debug('Matrix: could not register encryptor for room', { roomId: room?.roomId, err });
+      }
+    }
+    log.info('Matrix encryptors ensured', { encryptedRooms: registered, totalRooms: rooms.length });
+  } catch (err) {
+    log.warn('Matrix: encryptor backfill failed, encrypted sends may fail until next full sync', { err });
+  }
+}
+
+/**
  * Wrap the Matrix adapter so encrypted media attachments survive parsing.
  *
  * @beeper/chat-adapter-matrix@0.2.0's extractAttachments() only reads the
@@ -349,6 +433,19 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     ...args: Parameters<typeof origPostMessage> extends [string, ...infer R] ? R : never
   ) => {
     const resolvedTid = await resolveThreadId(threadId);
+    // Repair a missing encryptor at the one moment the target room is
+    // guaranteed to be known and loaded. The startup backfill can miss rooms
+    // whose state the client's store hadn't materialized yet when sync first
+    // reported ready — observed in production as encryptedRooms=0 on a start
+    // that later had several encrypted rooms. Without this, that gap surfaces
+    // as a permanent "Cannot encrypt event in unconfigured room" delivery
+    // failure. No-ops once the encryptor exists.
+    try {
+      const { roomID } = adapter.decodeThreadId(resolvedTid);
+      await ensureEncryptorForRoom(adapter, roomID);
+    } catch {
+      // Undecodable thread id — let the underlying send surface the error.
+    }
     return origPostMessage(resolvedTid, ...args);
   };
 
@@ -444,6 +541,12 @@ registerChannelAdapter('matrix', {
           resolve();
         }, 30_000);
       });
+
+      // Must run AFTER sync is ready (rooms are only in the client's store
+      // once the initial/restored sync has been applied) and BEFORE the host
+      // starts delivering, so the first outbound message after a restart
+      // already has a usable encryptor.
+      await ensureRoomEncryptors(matrixAdapter);
 
       // Persist the crypto store going forward: on a timer (bounds data loss
       // on an unclean exit that skips the shutdown hook below) and once more
