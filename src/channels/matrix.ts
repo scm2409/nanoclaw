@@ -55,6 +55,7 @@ import { onShutdown } from '../response-registry.js';
 import type { ChannelDefaults } from './adapter.js';
 import { createChatSdkBridge } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import { loadDmRooms, saveDmRoom, deleteDmRoom } from './matrix-dm-room-store.js';
 import { restoreSnapshot, saveSnapshot } from './matrix-crypto-store.js';
 import { decryptMatrixAttachment, isEncryptedFile } from './matrix-media-crypto.js';
 
@@ -276,6 +277,17 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
   // in), never from openDM()'s own return value — see resolveThreadId.
   const userToRoomCache = new Map<string, string>();
 
+  // Seed both caches from disk so a restart doesn't start cold: a
+  // proactive/host-initiated send right after a restart (a scheduled task,
+  // an approval prompt) — before any fresh inbound message has re-warmed
+  // the in-memory caches — previously had nothing to fall back on except
+  // openDM(), which is exactly the unreliable path every incident so far
+  // traced back to. See matrix-dm-room-store.ts.
+  for (const [userHandle, entry] of Object.entries(loadDmRooms())) {
+    userToRoomCache.set(userHandle, entry.roomId);
+    roomToUserCache.set(entry.roomId, userHandle);
+  }
+
   function isUserHandle(threadId: string): boolean {
     try {
       const { roomID } = adapter.decodeThreadId(threadId);
@@ -283,6 +295,82 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     } catch {
       return true;
     }
+  }
+
+  /**
+   * Follow an m.room.tombstone chain to its replacement room.
+   *
+   * A room upgrade is the "expected" way a Matrix room's identity changes —
+   * unlike a departure, it isn't evidence the mapping is wrong, just that the
+   * room id moved. A cached/persisted pointer at the old room id must resolve
+   * through to the successor rather than being treated as merely stale (which
+   * would fall to openDM() and invent a brand-new room for a user we already
+   * have a perfectly good, if renamed, room for).
+   *
+   * `seen` guards against a (malformed/cyclic) tombstone chain looping forever.
+   */
+  function followTombstone(roomId: string): string {
+    const client = (adapter as any).client;
+    let current = roomId;
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      const room = client?.getRoom?.(current);
+      const tombstone = room?.currentState?.getStateEvents?.('m.room.tombstone', '');
+      const replacement = tombstone?.getContent?.()?.replacement_room;
+      if (typeof replacement !== 'string' || !replacement) break;
+      current = replacement;
+    }
+    return current;
+  }
+
+  /**
+   * Search roomToUserCache (room -> user, populated from every confirmed
+   * inbound event and never pruned) for ANY room still on record for this
+   * user, before ever giving up to openDM().
+   *
+   * This closes the gap the single-slot userToRoomCache leaves: that slot
+   * holds only the MOST RECENTLY confirmed room, so when it goes stale
+   * (confirmed leave/ban — typically an openDM()-invented ghost room the
+   * user never actually joined, whose invite eventually reads as a
+   * departure), the old behavior deleted the slot and fell straight to
+   * openDM(), even when an older, perfectly live room for this same user
+   * was still sitting in roomToUserCache. That room is strictly better
+   * evidence than inventing yet another one.
+   *
+   * Prefers a room with confirmed 'join' membership; falls back to a room
+   * whose membership can't be determined yet (unloaded client store right
+   * after a restart — same "don't false-negative on missing state" policy
+   * as the single-slot check above) only if no confirmed-join room exists.
+   * Never returns a confirmed leave/ban room.
+   */
+  function findConfirmedRoomForUser(userHandle: string): string | undefined {
+    const client = (adapter as any).client;
+    let candidate: string | undefined;
+    for (const [roomId, user] of roomToUserCache) {
+      if (user !== userHandle) continue;
+      const resolvedRoomId = followTombstone(roomId);
+      const room = client?.getRoom?.(resolvedRoomId);
+      const membership = room?.getMyMembership?.();
+      if (membership === 'leave' || membership === 'ban') continue;
+      if (membership === 'join') return resolvedRoomId;
+      candidate = candidate ?? resolvedRoomId;
+    }
+    return candidate;
+  }
+
+  /**
+   * Drop a room from both caches for this user — used when a real send into
+   * it just failed, which is strictly stronger evidence of staleness than
+   * anything a membership check can tell us (the local Room object can look
+   * perfectly joined for a room that's genuinely dead server-side).
+   */
+  function invalidateKnownRoom(userHandle: string, roomId: string): void {
+    if (userToRoomCache.get(userHandle) === roomId) {
+      userToRoomCache.delete(userHandle);
+      deleteDmRoom(userHandle);
+    }
+    if (roomToUserCache.get(roomId) === userHandle) roomToUserCache.delete(roomId);
   }
 
   async function resolveThreadId(threadId: string): Promise<string> {
@@ -326,20 +414,49 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     log.debug('Matrix resolveThreadId cache lookup', { userHandle, knownRoomId, cacheSize: userToRoomCache.size });
     if (knownRoomId) {
       const client = (adapter as any).client;
-      const room = client?.getRoom(knownRoomId);
+      // A room upgrade (m.room.tombstone) isn't evidence the pointer is
+      // wrong, just that the room id moved — follow it before judging
+      // membership, which is meaningless on the superseded room.
+      const resolvedKnownRoomId = followTombstone(knownRoomId);
+      const room = client?.getRoom(resolvedKnownRoomId);
       const membership = room?.getMyMembership?.();
       log.debug('Matrix resolveThreadId cache validity check', {
         knownRoomId,
+        resolvedKnownRoomId,
         hasClient: Boolean(client),
         hasRoom: Boolean(room),
         membership,
       });
       if (membership === 'leave' || membership === 'ban') {
-        // Confirmed departure — let the normal openDM path below re-resolve
-        // (or recreate) the room.
+        // Confirmed departure of the single-slot pointer. Before falling to
+        // openDM(), check whether another room for this same user is still
+        // on record — see findConfirmedRoomForUser for why that outranks
+        // inventing a new room.
         userToRoomCache.delete(userHandle);
+        const otherKnownRoom = findConfirmedRoomForUser(userHandle);
+        if (otherKnownRoom) {
+          log.info('Matrix: single-slot room went stale, reusing another confirmed room instead of openDM', {
+            userHandle,
+            staleRoomId: knownRoomId,
+            recoveredRoomId: otherKnownRoom,
+          });
+          userToRoomCache.set(userHandle, otherKnownRoom);
+          roomToUserCache.set(otherKnownRoom, userHandle);
+          saveDmRoom(userHandle, otherKnownRoom);
+          return adapter.encodeThreadId({ roomID: otherKnownRoom });
+        }
       } else {
-        return adapter.encodeThreadId({ roomID: knownRoomId });
+        if (resolvedKnownRoomId !== knownRoomId) {
+          log.info('Matrix: cached room was tombstoned, following to replacement', {
+            userHandle,
+            oldRoomId: knownRoomId,
+            newRoomId: resolvedKnownRoomId,
+          });
+          userToRoomCache.set(userHandle, resolvedKnownRoomId);
+          roomToUserCache.set(resolvedKnownRoomId, userHandle);
+          saveDmRoom(userHandle, resolvedKnownRoomId);
+        }
+        return adapter.encodeThreadId({ roomID: resolvedKnownRoomId });
       }
     }
 
@@ -375,6 +492,7 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
       }
 
       userToRoomCache.set(userHandle, roomID);
+      saveDmRoom(userHandle, roomID);
     } catch (err) {
       // decode failure is non-fatal — outbound still works
       log.debug('Matrix: could not decode openDM result', { userHandle, err });
@@ -444,6 +562,7 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
       if (!roomID.startsWith('!')) return;
       roomToUserCache.set(roomID, senderId);
       userToRoomCache.set(senderId, roomID);
+      saveDmRoom(senderId, roomID);
     } catch (err) {
       log.debug('Matrix __onInboundSender decode failed', { threadId, senderId, err });
     }
@@ -485,7 +604,47 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     } catch {
       // Undecodable thread id — let the underlying send surface the error.
     }
-    return origPostMessage(resolvedTid, ...args);
+    try {
+      return await origPostMessage(resolvedTid, ...args);
+    } catch (err) {
+      // Self-heal only applies to sends we resolved ourselves from a user
+      // handle — a caller sending directly into an explicit room id owns
+      // that resolution and any retry policy itself.
+      if (!isUserHandle(threadId)) throw err;
+
+      let staleRoomId: string;
+      try {
+        staleRoomId = adapter.decodeThreadId(resolvedTid).roomID;
+      } catch {
+        throw err;
+      }
+      const userHandle = threadId.startsWith('matrix:') ? threadId.slice('matrix:'.length) : threadId;
+
+      // The local Room object can look perfectly joined for a room that's
+      // genuinely dead server-side (kicked, room deleted, etc.) — a real
+      // send failure is stronger evidence than any membership check, so
+      // this is the one case where re-deferring to openDM() is correct: we
+      // just learned our own cached/persisted history is wrong.
+      log.warn('Matrix: send into resolved room failed, invalidating cache and re-resolving via openDM', {
+        userHandle,
+        staleRoomId,
+        err,
+      });
+      invalidateKnownRoom(userHandle, staleRoomId);
+
+      const forced = await adapter.openDM(userHandle);
+      try {
+        const { roomID } = adapter.decodeThreadId(forced);
+        roomToUserCache.set(roomID, userHandle);
+        userToRoomCache.set(userHandle, roomID);
+        saveDmRoom(userHandle, roomID);
+        await ensureEncryptorForRoom(adapter, roomID);
+      } catch {
+        // Non-fatal — the retry below still has its best shot at the raw
+        // openDM result even if cache bookkeeping or encryptor setup failed.
+      }
+      return origPostMessage(forced, ...args);
+    }
   };
 
   adapter.startTyping = async (threadId: string) => {

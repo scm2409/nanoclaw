@@ -45,6 +45,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { readEnvFile } from '../env.js';
+import { getSystemdUnit } from '../install-slug.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const HARNESS_PATH = path.join(PROJECT_ROOT, 'scripts/matrix-live-harness.ts');
@@ -368,11 +369,21 @@ describeIfCreds('Matrix live channel (real homeserver)', () => {
     // must receive the reply IN THE SAME ROOM it wrote from. A reply routed
     // anywhere else simply never arrives here, which is precisely the
     // user-visible symptom.
-    const unitName = execSync(
-      "systemctl --user list-unit-files --no-legend | grep -i nanoclaw | awk '{print $1}' | head -1",
-      { encoding: 'utf-8' },
-    ).trim();
-    expect(unitName, 'could not resolve the nanoclaw systemd unit').toBeTruthy();
+    // Resolve the unit via the same install-slug-scoped function the setup
+    // wizard uses to create it (src/install-slug.ts), not a `grep -i
+    // nanoclaw` shell pipeline — this machine also runs a
+    // "claude-rc-nanoclaw.service" (this session's own remote-control
+    // server), and a substring grep has no way to prefer the real host over
+    // it. Restarting the wrong unit silently no-ops this test (the log line
+    // it waits for never appears) without touching the actual host at all.
+    const unitName = getSystemdUnit(PROJECT_ROOT);
+    try {
+      execSync(`systemctl --user is-active --quiet ${unitName}`);
+    } catch {
+      throw new Error(
+        `nanoclaw systemd unit "${unitName}" is not active — is the host running under systemd on this machine?`,
+      );
+    }
 
     // Step 1 — cold cache.
     execSync(`systemctl --user restart ${unitName}`);

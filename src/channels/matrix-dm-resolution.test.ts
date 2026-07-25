@@ -11,12 +11,34 @@
  * a user we've demonstrably already exchanged messages with never risks the
  * buggy fallback.
  */
-import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+
+const { TEST_DIR } = vi.hoisted(() => ({ TEST_DIR: '/tmp/nanoclaw-test-matrix-dm-resolution' }));
+
+vi.mock('../config.js', async () => {
+  const actual = await vi.importActual<typeof import('../config.js')>('../config.js');
+  return { ...actual, DATA_DIR: TEST_DIR };
+});
 
 import { wrapWithDmResolution } from './matrix.js';
 import type { createMatrixAdapter } from '@beeper/chat-adapter-matrix';
 
-type FakeRoom = { id: string; joinedCount: number; membership: string; otherMember: string };
+beforeEach(() => {
+  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+});
+
+afterEach(() => {
+  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+});
+
+type FakeRoom = {
+  id: string;
+  joinedCount: number;
+  membership: string;
+  otherMember: string;
+  tombstoneReplacement?: string;
+};
 
 function makeFakeAdapter(botId: string, rooms: Record<string, FakeRoom>, openDMResult: string) {
   const openDM = vi.fn(async (_userHandle: string) => openDMResult);
@@ -31,6 +53,12 @@ function makeFakeAdapter(botId: string, rooms: Record<string, FakeRoom>, openDMR
         getJoinedMemberCount: () => room.joinedCount,
         getJoinedMembers: () => [{ userId: botId }, { userId: room.otherMember }],
         getMyMembership: () => room.membership,
+        currentState: {
+          getStateEvents: (eventType: string) => {
+            if (eventType !== 'm.room.tombstone' || !room.tombstoneReplacement) return null;
+            return { getContent: () => ({ replacement_room: room.tombstoneReplacement }) };
+          },
+        },
       };
     },
   };
@@ -313,6 +341,209 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     // And the cache must not have been reverted for subsequent sends.
     await wrapped.postMessage('matrix:@user7:example.org', { markdown: 'second' });
     expect(postMessage).toHaveBeenLastCalledWith('!new:example.org', { markdown: 'second' });
+  });
+
+  it('falls back to a DIFFERENT confirmed room instead of openDM when the single-slot pointer goes stale', async () => {
+    // The 2026-07-25-reboot incident: userToRoomCache is a single slot. When
+    // its current room shows a confirmed departure (leave/ban), the old
+    // behavior deleted the slot and fell straight to openDM — even though
+    // roomToUserCache (room -> user, populated from every confirmed inbound
+    // event and never pruned) still had ANOTHER room for this exact user
+    // that is very much still joined. That other room is strictly better
+    // evidence than inventing a new one via openDM.
+    const { adapter, openDM, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!still-joined:example.org': {
+          id: '!still-joined:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user8:example.org',
+        },
+        '!abandoned:example.org': {
+          id: '!abandoned:example.org',
+          joinedCount: 2,
+          membership: 'leave',
+          otherMember: '@user8:example.org',
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+    const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
+
+    // Confirmed inbound from the still-good room first, then (later) from a
+    // room that has since been abandoned — so the abandoned one is the
+    // current single-slot pointer, but the good one is still on record.
+    hook('!still-joined:example.org', '@user8:example.org');
+    hook('!abandoned:example.org', '@user8:example.org');
+
+    await wrapped.postMessage('matrix:@user8:example.org', { markdown: 'hi' });
+
+    expect(openDM).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith('!still-joined:example.org', { markdown: 'hi' });
+  });
+
+  it('follows an m.room.tombstone to its replacement room instead of ever calling openDM', async () => {
+    // A room upgrade (m.room.tombstone) is the "expected" way a Matrix room's
+    // identity changes — not a failure like the ghost-room departures above.
+    // The single-slot cache still points at the old room id; resolveThreadId
+    // must follow the tombstone to the successor itself rather than treating
+    // the pointer as simply stale and falling to openDM.
+    const { adapter, openDM, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!old:example.org': {
+          id: '!old:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user9:example.org',
+          tombstoneReplacement: '!upgraded:example.org',
+        },
+        '!upgraded:example.org': {
+          id: '!upgraded:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user9:example.org',
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!old:example.org',
+      '@user9:example.org',
+    );
+
+    await wrapped.postMessage('matrix:@user9:example.org', { markdown: 'hi' });
+
+    expect(openDM).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith('!upgraded:example.org', { markdown: 'hi' });
+  });
+
+  it('follows a tombstone even when recovering via the reverse lookup, not just the fast path', async () => {
+    const { adapter, openDM, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!abandoned:example.org': {
+          id: '!abandoned:example.org',
+          joinedCount: 2,
+          membership: 'leave',
+          otherMember: '@user10:example.org',
+        },
+        '!old-and-tombstoned:example.org': {
+          id: '!old-and-tombstoned:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user10:example.org',
+          tombstoneReplacement: '!successor:example.org',
+        },
+        '!successor:example.org': {
+          id: '!successor:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user10:example.org',
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+    const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
+
+    hook('!old-and-tombstoned:example.org', '@user10:example.org');
+    hook('!abandoned:example.org', '@user10:example.org');
+
+    await wrapped.postMessage('matrix:@user10:example.org', { markdown: 'hi' });
+
+    expect(openDM).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith('!successor:example.org', { markdown: 'hi' });
+  });
+
+  it('self-heals on a send failure: invalidates the cache and re-resolves via openDM exactly once', async () => {
+    // A cached room can look locally fine (membership 'join', no tombstone
+    // the client knows about) and still be genuinely dead server-side — the
+    // local Room object is just as capable of lagging reality as any other
+    // client-side state. Rather than trusting the cache forever once a real
+    // send fails, that's the moment to invalidate it and let openDM()
+    // re-resolve — the one case where openDM is actually the right call,
+    // because we've just learned our own history is wrong.
+    const { adapter, openDM } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!looks-fine:example.org': {
+          id: '!looks-fine:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user11:example.org',
+        },
+        '!fresh:example.org': {
+          id: '!fresh:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user11:example.org',
+        },
+      },
+      '!fresh:example.org',
+    );
+    const postMessage = vi.fn(async (threadId: string, ...args: unknown[]) => {
+      if (threadId === '!looks-fine:example.org') throw new Error('M_FORBIDDEN: not a member of this room');
+      return { id: 'sent', threadId, args };
+    });
+    (adapter as unknown as { postMessage: typeof postMessage }).postMessage = postMessage;
+
+    const wrapped = wrapWithDmResolution(adapter);
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!looks-fine:example.org',
+      '@user11:example.org',
+    );
+
+    await wrapped.postMessage('matrix:@user11:example.org', { markdown: 'hi' });
+
+    expect(openDM).toHaveBeenCalledTimes(1);
+    expect(openDM).toHaveBeenCalledWith('@user11:example.org');
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenNthCalledWith(1, '!looks-fine:example.org', { markdown: 'hi' });
+    expect(postMessage).toHaveBeenNthCalledWith(2, '!fresh:example.org', { markdown: 'hi' });
+
+    // The cache must now point at the recovered room — no repeat openDM call.
+    await wrapped.postMessage('matrix:@user11:example.org', { markdown: 'again' });
+    expect(openDM).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenLastCalledWith('!fresh:example.org', { markdown: 'again' });
+  });
+
+  it('persists the confirmed room across a restart — a fresh instance never calls openDM for an already-known user', async () => {
+    // The residual gap the in-memory-only caches leave: they're wiped on
+    // every restart, so a proactive/host-initiated send right after one
+    // (before any fresh inbound message re-warms the cache) had nothing to
+    // fall back on except openDM(). Two separate wrapWithDmResolution calls
+    // sharing the same on-disk store simulate exactly that restart.
+    const rooms = {
+      '!persisted:example.org': {
+        id: '!persisted:example.org',
+        joinedCount: 2,
+        membership: 'join',
+        otherMember: '@user12:example.org',
+      },
+    };
+
+    const instanceA = makeFakeAdapter(BOT_ID, rooms, '!should-not-be-used:example.org');
+    const wrappedA = wrapWithDmResolution(instanceA.adapter);
+    (wrappedA as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!persisted:example.org',
+      '@user12:example.org',
+    );
+
+    // "Restart": a brand-new adapter instance and a brand-new
+    // wrapWithDmResolution call — fresh in-memory caches — but the same
+    // on-disk store (this test's DATA_DIR mock is process-wide, not
+    // per-instance).
+    const instanceB = makeFakeAdapter(BOT_ID, rooms, '!should-not-be-used:example.org');
+    const wrappedB = wrapWithDmResolution(instanceB.adapter);
+
+    await wrappedB.postMessage('matrix:@user12:example.org', { markdown: 'hi' });
+
+    expect(instanceB.openDM).not.toHaveBeenCalled();
+    expect(instanceB.postMessage).toHaveBeenCalledWith('!persisted:example.org', { markdown: 'hi' });
   });
 
   it('startTyping also uses the confirmed-inbound room, bypassing openDM', async () => {
