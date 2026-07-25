@@ -30,7 +30,7 @@ substantive commit(s) first, then fix the `Commits:` line in a follow-up
 commit that touches only the changelog file — that commit is automatically
 exempt, so the chase terminates in exactly one extra commit instead of never.
 
-Commits: (pending) · vibecoded with Claude Sonnet 5
+Commits: 362de1f · vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Matrix DM room resolution: stop trusting openDM() as the fallback authority
 
