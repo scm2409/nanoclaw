@@ -11,26 +11,25 @@ the entry format and how this file is kept up to date.
 
 ---
 
-## 2026-07-25 — Fix an infinite loop in the fork-changelog SHA-coverage check
+## 2026-07-25 — Drop commit shas from the changelog convention entirely
 
 While closing out the Matrix DM-resolution fix below, hit a real bug in the
 changelog convention itself: after committing the fix, I tried to update its
 `Commits:` line to name the commit's own sha, committed that, then had to
 update the line again to also cover *that* commit, and so on — a commit's sha
 is a hash of its own content, so a commit can never name its own final sha
-inside itself. Chased this three times before catching it.
+inside itself. Chased this three times before catching it, then tried a
+narrower fix (exempting changelog-only commits from the coverage check) —
+still a workaround for a self-inflicted problem. Simplest fix: don't require
+shas at all.
 
-Fixed `check-fork-changelog.mjs`'s `newCommits()` (new `isChangelogOnlyCommit`
-helper): a commit whose entire diff touches only `FORK-CHANGELOG.md` is now
-exempt from the coverage requirement — it's metadata about an already-described
-change, not a new one needing its own description, so its own sha never needs
-to appear anywhere. Documented the workflow and the reasoning in
-`docs/fork-changelog.md`'s new "self-reference trap" section: make the
-substantive commit(s) first, then fix the `Commits:` line in a follow-up
-commit that touches only the changelog file — that commit is automatically
-exempt, so the chase terminates in exactly one extra commit instead of never.
+Entries now end with a plain `vibecoded with <model>` line — no `Commits:`
+trailer, no sha-coverage check in `check-fork-changelog.mjs`. The heading's
+date is enough provenance; `git log` is authoritative for anything more
+specific. Updated `docs/fork-changelog.md` and stripped the now-removed
+`Commits:` line from every existing entry below.
 
-Commits: 362de1f · vibecoded with Claude Sonnet 5
+vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Matrix DM room resolution: stop trusting openDM() as the fallback authority
 
@@ -78,22 +77,20 @@ verifies it's active before restarting it. Confirmed the real host
 (`nanoclaw-v2-e1d62e67.service`) was never touched by the earlier failure, then
 re-ran the fixed test against it for real — passed in 41s.
 
-Commits: 9b52920 · vibecoded with Claude Sonnet 5
+vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Fork changelog + vibecoded disclosure
 
 Made this file structurally hard to skip, plus surfaced that this repo is vibecoded. A
-`SessionStart` hook records each work item's baseline (HEAD sha, a hash of this file, the
-model in use); a `PostToolUse` hook records which repo files Claude actually writes; a `Stop`
-hook (`.claude/hooks/check-fork-changelog.mjs`, wired in `.claude/settings.json`) blocks the
-turn from ending if the session changed the fork but this file doesn't show it — checked
-against edits, not just commits, since commits need approval and a typical session ends with
-none yet. Commit ranges written here (`A..B`) are read inclusive of both ends and expanded to
-full SHAs for the coverage check. The gate is satisfiable by editing this file alone; it never
-asks Claude to commit. Also added the README callout disclosing the fork is vibecoded, and
+`SessionStart` hook records each work item's baseline (a hash of this file, the model in
+use); a `PostToolUse` hook records which repo files Claude actually writes; a `Stop` hook
+(`.claude/hooks/check-fork-changelog.mjs`, wired in `.claude/settings.json`) blocks the turn
+from ending if the session wrote a fork file but this file's content hasn't changed since.
+The gate is satisfiable by editing this file alone; it never asks Claude to commit and never
+inspects git history. Also added the README callout disclosing the fork is vibecoded, and
 `docs/fork-changelog.md` documenting the convention.
 
-Commits: 0170eb5 · vibecoded with Claude Opus 5
+vibecoded with Claude Opus 5
 
 ## 2026-07-25 — Voice-note speech-to-text
 
@@ -113,7 +110,7 @@ policy. It never throws: a missing key, network failure, or non-200 degrades to
 the plain attachment hint rather than dropping the message. Override the model
 with `OPENROUTER_TRANSCRIPTION_MODEL`.
 
-Commits: 6466144, cf8eae7 · vibecoded with Claude Sonnet 5
+vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Matrix channel
 
@@ -124,5 +121,5 @@ retry gap; encrypted-media fetch and agent trust for voice notes; permanent
 delivery failure after a snapshot-restored restart; and replies landing in the
 wrong room when `openDM` resolved slowly.
 
-Commits: 4cf4714..18c0b49 · vibecoded with Claude Sonnet 5 and Claude Fable 5
+vibecoded with Claude Sonnet 5 and Claude Fable 5
 

@@ -13,22 +13,20 @@ own history separate from upstream's ([nanocoai/nanoclaw](https://github.com/nan
 
 ## The invariant
 
-Every commit in `nanoclaw-upstream/main..HEAD` must be referenced in
-`FORK-CHANGELOG.md`, either by its short SHA or by an inclusive `A..B` range
-(unlike git's own range syntax, `A..B` here includes `A`). A `Stop` hook
+Any Claude Code session that writes a fork-local file must also change
+`FORK-CHANGELOG.md` before the session ends. A `Stop` hook
 (`.claude/hooks/check-fork-changelog.mjs`, wired in `.claude/settings.json`)
-checks this at the end of every Claude Code turn and blocks the turn from
-ending if any fork commit is uncovered — it reports the missing SHAs and their
-subjects in the block reason.
+checks this at the end of every turn — if the session wrote a non-exempt file
+but the changelog's content is unchanged since the session started, it blocks
+the turn and lists the files written.
 
 The hook reads the **working tree** copy of the file, not `HEAD`, so writing
 the entry — without committing it — already satisfies the check. Commits still
-require the human's approval; the hook never asks Claude to commit.
+require the human's approval; the hook never asks Claude to commit, and never
+inspects git history or commit shas.
 
-A `SessionStart` hook (same script, `--session-start`) does the same
-comparison non-blockingly, as a heads-up at the start of a session, and
-supplies the model-attribution string from the harness's own `model` field
-rather than Claude's self-report.
+A `SessionStart` hook (same script) records the changelog's content hash as
+the session's baseline and prints the convention as a reminder.
 
 If neither hook fires (e.g. hooks disabled, or a change made outside Claude
 Code), the invariant just goes unchecked until the next Claude Code turn on
@@ -44,41 +42,23 @@ the same topic.
 ## <YYYY-MM-DD> — <short title>
 
 <Prose: what changed and why, worth a sentence or two of context a GitHub
-visitor wouldn't get from the commit subjects alone. Reference files/functions
-that matter.>
+visitor wouldn't get from a diff alone. Reference files/functions that matter.>
 
-Commits: <sha>, <sha> · vibecoded with <model>
+vibecoded with <model>
 ```
 
-- Multiple commits from one topic: comma-separate SHAs, or use an inclusive
-  `A..B` range if they're contiguous.
-- Multiple models across a range: `vibecoded with Claude Sonnet 5 and Claude Fable 5`.
-- Keep it to short SHAs (`git log --format=%h`) — the hook normalizes either
-  length via `git rev-parse --short`.
+- No commit shas anywhere in an entry. The heading's date is enough
+  provenance; `git log` is authoritative for anything more specific.
+  (An earlier revision of this convention required naming commit shas and
+  had a `Stop`-hook check to match — dropped entirely after it produced a
+  real incident: a commit's sha is a hash of its own content, so a commit can
+  never name its own final sha inside itself, and the fix-up commits chasing
+  that kept needing another fix-up commit to reference themselves. Simplest
+  fix was removing the requirement, not patching around the paradox.)
+- Multiple models on one entry: `vibecoded with Claude Sonnet 5 and Claude Fable 5`.
 
 ## Writing an entry
 
 Write it as part of the work, before asking to commit — not as an
 afterthought once the hook blocks. The hook is a backstop, not the primary
 mechanism.
-
-## The self-reference trap
-
-A commit's sha is a hash of its own content, so a commit can never name its
-own final sha inside its own message or files — there's no way to know it
-until after the commit exists, and writing it in afterward changes the
-content, which changes the hash again. Don't try to chase this by repeatedly
-amending or adding "now update the sha" commits — it never converges.
-
-The actual workflow:
-
-1. Make the substantive commit(s) first. Get the real sha(s) from `git log`.
-2. Write (or fix) the changelog entry's `Commits:` line to name those shas.
-   If this edit happens in its own follow-up commit, that commit's diff
-   touches only `FORK-CHANGELOG.md` — the hook (`check-fork-changelog.mjs`,
-   `isChangelogOnlyCommit`) exempts any commit whose entire diff is that one
-   file from the coverage check, so it never needs to reference itself.
-
-A changelog-only commit is metadata about an already-described change, not a
-new change needing its own description — it's fine for its own sha to go
-unmentioned anywhere.

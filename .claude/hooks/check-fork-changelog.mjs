@@ -8,29 +8,31 @@
  * tracked content; the only thing this script writes is its own gitignored
  * state under .tmp-fork-changelog/:
  *
- *   session-start   SessionStart hook. Records this work item's baseline
- *                   (HEAD sha, a hash of FORK-CHANGELOG.md, the model in use)
- *                   so later modes can tell what changed since. Also prints
- *                   the convention as session context (plain stdout, which
- *                   Claude Code adds automatically for SessionStart).
+ *   session-start   SessionStart hook. Records this work item's baseline (a
+ *                   hash of FORK-CHANGELOG.md, the model in use) so later
+ *                   modes can tell whether the changelog changed since. Also
+ *                   prints the convention as session context (plain stdout,
+ *                   which Claude Code adds automatically for SessionStart).
  *
  *   record-edit     PostToolUse hook on Write|Edit|MultiEdit|NotebookEdit.
- *                   Records which repo-relative paths Claude actually wrote,
- *                   so the Stop check has a signal that doesn't depend on a
- *                   commit having happened yet.
+ *                   Records which repo-relative paths Claude actually wrote
+ *                   this session.
  *
  *   stop            Stop hook. Blocks the turn from ending
  *                   (`{"decision":"block"}` on exit 0 — the documented way to
- *                   keep Claude going) if the session changed the fork but
- *                   FORK-CHANGELOG.md doesn't show it.
+ *                   keep Claude going) if the session wrote a non-exempt
+ *                   file but FORK-CHANGELOG.md's content didn't change.
  *
- * Why both edits and commits are tracked: commits need the human's approval
- * (per project convention), so the typical session ends with real edits and
- * *no* new commit. Gating on `nanoclaw-upstream/main..HEAD` alone would never
- * fire for that — the common case — so the primary signal is "Claude wrote a
- * non-exempt file this session", checked by comparing FORK-CHANGELOG.md's
- * content hash at session start vs. now. Commit tracking is layered on top
- * only to demand that, once commits exist, their SHAs are actually named.
+ * Deliberately edit-based only, not commit-based: commits need the human's
+ * approval (per project convention), so the typical session ends with real
+ * edits and no new commit yet — gating on git history would never fire for
+ * that, the common case. Entries don't reference commit shas either: a
+ * commit is a hash of its own content, so a commit can never name its own
+ * final sha inside itself, and earlier revisions of this hook that tried to
+ * verify sha coverage led straight into that trap (see git history / the
+ * "2026-07-25 — Fix an infinite loop" entry for the incident). The date in
+ * each entry's own heading is enough provenance; `git log` is authoritative
+ * for anything more specific.
  *
  * The gate is satisfiable by a file edit alone — it never asks Claude to
  * commit, and it reads the working tree, not HEAD.
@@ -45,7 +47,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const UPSTREAM_REF = 'nanoclaw-upstream/main';
 const CHANGELOG_NAME = 'FORK-CHANGELOG.md';
 const STATE_DIR = '.tmp-fork-changelog'; // matched by the repo's existing `.tmp-*` gitignore entry
 const MAX_BLOCKS = 3; // give up after this many reminders in one turn and just warn the user instead
@@ -108,7 +109,6 @@ function changelogHash(root) {
 function freshState(root, sessionId, model) {
   return {
     sessionId,
-    baselineSha: tryGit(['rev-parse', 'HEAD'], root),
     logHash: changelogHash(root),
     model: model || null,
     edited: [],
@@ -124,7 +124,7 @@ function sessionStart(root, input) {
   const prior = loadState(root, sessionId);
 
   // /compact and --resume continue the SAME work item — don't reset the
-  // baseline mid-item, or earlier edits/commits stop being demanded.
+  // baseline mid-item, or earlier edits stop being demanded.
   const keepBaseline = prior && (source === 'resume' || source === 'compact');
   const state = keepBaseline
     ? { ...prior, model: input.model || prior.model }
@@ -141,9 +141,11 @@ function sessionStart(root, input) {
       ``,
       `  ## <YYYY-MM-DD> — <short title>`,
       `  <what changed and why, in prose>`,
-      `  Commits: <sha or A..B, inclusive of both ends> · vibecoded with ${model}`,
+      `  vibecoded with ${model}`,
       ``,
-      `Write the entry as part of the work, before asking to commit. See docs/fork-changelog.md.`,
+      `No commit shas in the entry — the date in the heading is enough, and git log is`,
+      `authoritative for anything more specific. Write the entry as part of the work, before`,
+      `asking to commit. See docs/fork-changelog.md.`,
     ].join('\n')
   );
 }
@@ -188,56 +190,6 @@ function ignoredPaths(root, relPaths) {
   }
 }
 
-// True if a commit's entire diff touches only FORK-CHANGELOG.md. Such a
-// commit can never name its own final sha in its own content — that's a
-// basic property of content hashing, not a gap to patch around — so a
-// changelog-only commit is exempt from the coverage requirement rather than
-// endlessly chased. It's metadata about an already-described change, not a
-// new one needing description.
-function isChangelogOnlyCommit(root, sha) {
-  const out = tryGit(['diff-tree', '--no-commit-id', '--name-only', '-r', sha], root);
-  if (out === null) return false;
-  const files = out.split('\n').filter(Boolean);
-  return files.length === 1 && files[0] === CHANGELOG_NAME;
-}
-
-function newCommits(root, baselineSha) {
-  if (!baselineSha) return [];
-  const head = tryGit(['rev-parse', 'HEAD'], root);
-  if (!head || head === baselineSha) return [];
-  // Amend/rebase can make the baseline unreachable from HEAD; drop the
-  // commit-coverage requirement rather than demand vanished shas.
-  if (tryGit(['merge-base', '--is-ancestor', baselineSha, 'HEAD'], root) === null) return [];
-  const out = tryGit(['log', '--reverse', '--format=%H\t%s', `${baselineSha}..HEAD`], root);
-  if (!out) return [];
-  return out
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const tab = line.indexOf('\t');
-      return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
-    })
-    .filter(({ sha }) => !isChangelogOnlyCommit(root, sha));
-}
-
-// Every bare sha and every `a..b` range in the changelog, expanded to full
-// shas. Ranges are read inclusively of `a` (unlike git's own `a..b`), since
-// that's how "Commits: X..Y" reads in prose.
-function coveredShas(root, text) {
-  const covered = new Set();
-  for (const m of text.matchAll(/\b([0-9a-f]{7,40})\b(?:\.\.([0-9a-f]{7,40})\b)?/gi)) {
-    const [, a, b] = m;
-    const fullA = tryGit(['rev-parse', '--verify', '--quiet', `${a}^{commit}`], root);
-    if (fullA) covered.add(fullA);
-    if (b) {
-      const expanded =
-        tryGit(['rev-list', `${a}~1..${b}`], root) ?? tryGit(['rev-list', `${a}..${b}`], root);
-      if (expanded) for (const sha of expanded.split('\n').filter(Boolean)) covered.add(sha);
-    }
-  }
-  return covered;
-}
-
 function stop(root, input) {
   const sessionId = input.session_id;
   const state = loadState(root, sessionId);
@@ -249,27 +201,15 @@ function stop(root, input) {
     exitOpen();
   }
 
-  const commits = newCommits(root, state.baselineSha);
-
   const ignored = ignoredPaths(root, state.edited || []);
   const editedFiles = (state.edited || []).filter((p) => !ignored.has(p));
 
-  if (commits.length === 0 && editedFiles.length === 0) exitOpen(); // nothing to log
+  if (editedFiles.length === 0) exitOpen(); // nothing to log
 
   const currentHash = changelogHash(root);
   const logChanged = currentHash !== state.logHash;
 
-  const changelogPath = path.join(root, CHANGELOG_NAME);
-  const text = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8') : '';
-  const covered = commits.length ? coveredShas(root, text) : new Set();
-  const uncoveredCommits = commits.filter(({ sha }) => !covered.has(sha));
-
-  const commitsOk = commits.length === 0 || uncoveredCommits.length === 0;
-  // An edits-only session (no commits) can only pass by actually changing the
-  // changelog — there's nothing else to check it against.
-  const editsOk = editedFiles.length === 0 ? true : logChanged;
-
-  if (commitsOk && editsOk) exitOpen();
+  if (logChanged) exitOpen();
 
   state.blocks = (state.blocks || 0) + 1;
   if (state.blocks > MAX_BLOCKS) {
@@ -286,29 +226,14 @@ function stop(root, input) {
   const lines = [];
   lines.push(`This session changed the fork but ${CHANGELOG_NAME} doesn't describe it yet.`);
   lines.push('');
-  if (editedFiles.length) {
-    lines.push(`Files written this session (${editedFiles.length}):`);
-    for (const p of editedFiles.slice(0, 20)) lines.push(`  ${p}`);
-    if (editedFiles.length > 20) lines.push(`  … and ${editedFiles.length - 20} more`);
-    lines.push('');
-  }
-  if (commits.length) {
-    lines.push(`New commits since this work item started (${commits.length}):`);
-    for (const { sha, subject } of commits) lines.push(`  ${sha.slice(0, 7)} ${subject}`);
-    if (uncoveredCommits.length) {
-      const range = `${commits[0].sha.slice(0, 7)}..${commits[commits.length - 1].sha.slice(0, 7)}`;
-      lines.push(
-        `${uncoveredCommits.length} of them aren't named or covered by a range in ${CHANGELOG_NAME}. A ` +
-          `'Commits: ${range}' line covers all of them (ranges are read inclusive of both ends).`
-      );
-    }
-    lines.push('');
-  }
+  lines.push(`Files written this session (${editedFiles.length}):`);
+  for (const p of editedFiles.slice(0, 20)) lines.push(`  ${p}`);
+  if (editedFiles.length > 20) lines.push(`  … and ${editedFiles.length - 20} more`);
+  lines.push('');
   lines.push(
     `Add or extend ONE entry at the top of ${CHANGELOG_NAME} for this whole work item — a ` +
       `'## <YYYY-MM-DD> — <short title>' heading, a short prose paragraph, then a trailer line ` +
-      `'Commits: <shas or A..B> · vibecoded with <model>'. If commits haven't happened yet, write ` +
-      `'Commits: (uncommitted)' for now.`
+      `'vibecoded with <model>'. No commit shas — the date in the heading is enough.`
   );
   lines.push(
     `Edit the file only — do NOT run git commit or git add; the human approves every commit ` +
