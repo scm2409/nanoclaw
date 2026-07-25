@@ -57,7 +57,7 @@ verifies it's active before restarting it. Confirmed the real host
 (`nanoclaw-v2-e1d62e67.service`) was never touched by the earlier failure, then
 re-ran the fixed test against it for real — passed in 41s.
 
-Commits: (pending commit) · vibecoded with Claude Sonnet 5
+Commits: 9b52920..e373ef7 · vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Fork changelog + vibecoded disclosure
 
