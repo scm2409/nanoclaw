@@ -16,6 +16,7 @@ import path from 'path';
 
 import { deriveAttachmentName } from './attachment-naming.js';
 import { isSafeAttachmentName } from './attachment-safety.js';
+import { transcribeAudioFile } from './attachment-transcription.js';
 import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
 import { ensureContainedInboxDir, isPathInside } from './inbox-safety.js';
@@ -370,6 +371,55 @@ function extractAttachmentFiles(
   }
 
   return changed ? JSON.stringify(parsed) : contentStr;
+}
+
+/**
+ * Stage attachments to disk (via extractAttachmentFiles), then transcribe
+ * any that a channel adapter flagged `isVoice` (see chat-sdk-bridge.ts's
+ * `isVoiceAttachment` hook). Blocks message delivery on the transcription
+ * call — the caller (router.ts, the only path real channel messages take)
+ * is already async, and a failed/slow transcription degrades to the plain
+ * attachment hint rather than blocking the message indefinitely, since
+ * transcribeAudioFile never throws and OpenRouter's turbo model returns in
+ * roughly a second either way.
+ *
+ * Only router.ts's inbound-channel path should call this — every other
+ * writeSessionMessage caller writes synthetic system messages with no
+ * attachments, so they keep calling the plain synchronous writeSessionMessage
+ * unchanged (extractAttachmentFiles is idempotent on content that's already
+ * been through this function, since the `data` field is gone by then).
+ */
+export async function extractAndTranscribeAttachments(
+  agentGroupId: string,
+  sessionId: string,
+  messageId: string,
+  contentStr: string,
+): Promise<string> {
+  const staged = extractAttachmentFiles(agentGroupId, sessionId, messageId, contentStr);
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(staged);
+  } catch {
+    return staged;
+  }
+
+  const attachments = parsed.attachments as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(attachments)) return staged;
+
+  let changed = false;
+  for (const att of attachments) {
+    if (att.isVoice !== true || typeof att.localPath !== 'string') continue;
+
+    const filePath = path.join(sessionDir(agentGroupId, sessionId), att.localPath);
+    const transcript = await transcribeAudioFile(filePath);
+    if (transcript) {
+      att.transcript = transcript;
+      changed = true;
+    }
+  }
+
+  return changed ? JSON.stringify(parsed) : staged;
 }
 
 /** Open the inbound DB for a session (host reads/writes). */

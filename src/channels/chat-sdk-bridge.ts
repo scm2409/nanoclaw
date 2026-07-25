@@ -45,6 +45,16 @@ export interface ReplyContext {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ReplyContextExtractor = (raw: Record<string, any>) => ReplyContext | null;
 
+/**
+ * Detect whether an attachment is a voice note (as opposed to an uploaded
+ * audio file) using platform-specific markers. `att` is the in-progress
+ * enriched attachment entry (type/name/mimeType/size); `raw` is the
+ * platform's raw message, when available. Return true to flag the
+ * attachment for automatic transcription in session-manager.ts.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type VoiceAttachmentDetector = (att: Record<string, any>, raw: Record<string, any> | undefined) => boolean;
+
 export interface ChatSdkBridgeConfig {
   adapter: Adapter;
   /**
@@ -61,6 +71,17 @@ export interface ChatSdkBridgeConfig {
   botToken?: string;
   /** Platform-specific reply context extraction. */
   extractReplyContext?: ReplyContextExtractor;
+  /** Platform-specific voice-note detection, for automatic transcription. */
+  isVoiceAttachment?: VoiceAttachmentDetector;
+  /**
+   * Called once per inbound message with the raw (pre-transformation) thread
+   * ID and the resolved sender ID. Lets a channel build a reliable
+   * thread↔sender mapping straight from the event's own sender field —
+   * unlike deriving it from room-membership enumeration (e.g. Matrix's
+   * `getJoinedMembers()`), this doesn't depend on lazily-loaded state that
+   * can be incomplete right after a fresh login/sync.
+   */
+  onInboundSender?: (threadId: string, senderId: string) => void;
   /**
    * Whether this platform uses threads as the primary conversation unit.
    * See `ChannelAdapter.supportsThreads`. Declared by the calling channel
@@ -155,6 +176,30 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   let setupConfig: ChannelSetup;
   let gatewayAbort: AbortController | null = null;
 
+  /**
+   * Must run BEFORE adapter.channelIdFromThreadId(thread.id) in every
+   * dispatch handler below, not just before messageToInbound() — channel-id
+   * resolution can rely on the same per-channel state (e.g. Matrix's
+   * room-membership cache) that this hook warms, and that state can be
+   * stale/empty the first time a thread is seen after a restart. Warming the
+   * cache from the message's own sender field first (before any resolution
+   * that might need it) closes that gap; warming it only afterward — inside
+   * messageToInbound, as this used to do — is too late for the very call
+   * that needed it.
+   */
+  function warmInboundSenderCache(message: ChatMessage): void {
+    if (!config.onInboundSender) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const author = message.author as any;
+    const senderId = author?.userId;
+    if (!senderId || !message.threadId) return;
+    try {
+      config.onInboundSender(message.threadId, senderId);
+    } catch (err) {
+      log.warn('onInboundSender hook threw', { err });
+    }
+  }
+
   async function messageToInbound(
     message: ChatMessage,
     isMention: boolean,
@@ -182,6 +227,14 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             entry.data = buffer.toString('base64');
           } catch (err) {
             log.warn('Failed to download attachment', { type: att.type, err });
+          }
+        }
+        if (config.isVoiceAttachment) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            entry.isVoice = config.isVoiceAttachment(entry, message.raw as Record<string, any> | undefined);
+          } catch (err) {
+            log.warn('isVoiceAttachment predicate threw', { type: att.type, err });
           }
         }
         enriched.push(entry);
@@ -257,6 +310,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // engaged. Carry the SDK's `message.isMention` through so mention-mode
       // wirings still fire on in-thread mentions.
       chat.onSubscribedMessage(async (thread, message) => {
+        warmInboundSenderCache(message);
         const channelId = adapter.channelIdFromThreadId(thread.id);
         await setupConfig.onInbound(
           channelId,
@@ -267,6 +321,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
       // @mention in an unsubscribed thread — SDK-confirmed bot mention.
       chat.onNewMention(async (thread, message) => {
+        warmInboundSenderCache(message);
         const channelId = adapter.channelIdFromThreadId(thread.id);
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true, true));
       });
@@ -278,6 +333,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // decides at router fanout whether replies land in-thread or all DM
       // sub-threads collapse into the one DM session.
       chat.onDirectMessage(async (thread, message) => {
+        warmInboundSenderCache(message);
         const channelId = adapter.channelIdFromThreadId(thread.id);
         log.info('Inbound DM received', {
           adapter: adapter.name,
@@ -299,6 +355,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // so forwarding every one is cheap enough to not need a bridge-side
       // flood gate.
       chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
+        warmInboundSenderCache(message);
         const channelId = adapter.channelIdFromThreadId(thread.id);
         await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false, true));
       });

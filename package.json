@@ -24,7 +24,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:matrix-live": "vitest run --config vitest.matrix-live.config.ts"
   },
   "dependencies": {
     "@beeper/chat-adapter-matrix": "0.2.0",

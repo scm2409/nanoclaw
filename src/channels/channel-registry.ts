@@ -12,9 +12,19 @@ const SETUP_RETRY_DELAYS_MS = [2000, 5000, 10000];
 
 /** Duck-type check — adapters that throw an Error with `name === 'NetworkError'`
  * (Chat SDK's `@chat-adapter/shared.NetworkError` and similar) get a retry on
- * setup. Avoids depending on `@chat-adapter/shared` at trunk level. */
+ * setup. Avoids depending on `@chat-adapter/shared` at trunk level.
+ *
+ * Also matches matrix-js-sdk's `ConnectionError` (a transient
+ * connection-level failure — DNS/network not ready yet, timeout, dropped
+ * connection — distinct name, same "worth retrying" semantics). Without
+ * this, a one-off network hiccup during setup (e.g. right at boot, before
+ * networking is fully up) permanently kills the Matrix channel for the rest
+ * of the process's life: confirmed in production on 2026-07-25, a
+ * `ConnectionError` at boot fell straight through to the non-retrying
+ * `throw err` below and the channel never recovered until the next full
+ * service restart. */
 function isNetworkError(err: unknown): err is Error {
-  return err instanceof Error && err.name === 'NetworkError';
+  return err instanceof Error && (err.name === 'NetworkError' || err.name === 'ConnectionError');
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));

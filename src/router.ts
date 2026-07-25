@@ -30,7 +30,12 @@ import {
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
-import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
+import {
+  resolveSession,
+  writeSessionMessage,
+  writeOutboundDirect,
+  extractAndTranscribeAttachments,
+} from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
@@ -364,8 +369,9 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       // engagement simply didn't fire, but NOT when engagement fired and
       // the access/scope gate refused — those refusals are security
       // decisions about an untrusted sender, and silently storing their
-      // message (which also stages their attachments to disk via
-      // writeSessionMessage → extractAttachmentFiles) is exactly what the
+      // message (which also stages their attachments to disk, and
+      // transcribes any flagged as voice notes, via
+      // extractAndTranscribeAttachments) is exactly what the
       // gate is meant to prevent.
       await deliverToAgent(agent, agentGroup, mg, event, userId, threadsEnabled, effectiveThreadId, false);
       accumulatedCount++;
@@ -504,14 +510,25 @@ async function deliverToAgent(
     }
   }
 
+  const messageId = messageIdForAgent(event.message.id, agent.agent_group_id);
+  // Stages attachments to disk and blocks on transcribing any voice notes
+  // (chat-sdk-bridge.ts's isVoiceAttachment hook) before the message lands
+  // in inbound.db, so the agent sees the transcript on first read.
+  const content = await extractAndTranscribeAttachments(
+    session.agent_group_id,
+    session.id,
+    messageId,
+    event.message.content,
+  );
+
   writeSessionMessage(session.agent_group_id, session.id, {
-    id: messageIdForAgent(event.message.id, agent.agent_group_id),
+    id: messageId,
     kind: event.message.kind,
     timestamp: event.message.timestamp,
     platformId: deliveryAddr.platformId,
     channelType: deliveryAddr.channelType,
     threadId: deliveryAddr.threadId,
-    content: event.message.content,
+    content,
     trigger: wake ? 1 : 0,
   });
 

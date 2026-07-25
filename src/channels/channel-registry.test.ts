@@ -120,6 +120,40 @@ describe('channel registry', () => {
     const noCreds = active.find((a) => a.name === 'no-creds');
     expect(noCreds).toBeUndefined();
   });
+
+  it('retries setup on a ConnectionError (matrix-js-sdk transient network failure) and eventually starts', async () => {
+    // Regression test: a ConnectionError at boot (e.g. networking not fully
+    // up yet) used to fall straight through to the non-retrying `throw err`
+    // in initChannelAdapters, permanently killing the channel until the next
+    // full service restart — confirmed in production on 2026-07-25.
+    const { registerChannelAdapter, initChannelAdapters, getActiveAdapters } = await import('./channel-registry.js');
+
+    const adapter = createMockAdapter('flaky');
+    let attempts = 0;
+    const origSetup = adapter.setup.bind(adapter);
+    adapter.setup = async (config) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const err = new Error('fetch failed: fetch failed');
+        err.name = 'ConnectionError';
+        throw err;
+      }
+      return origSetup(config);
+    };
+
+    registerChannelAdapter('flaky-channel', { factory: () => adapter });
+
+    await initChannelAdapters(() => ({
+      conversations: [],
+      onInbound: () => {},
+      onInboundEvent: () => {},
+      onMetadata: () => {},
+      onAction: () => {},
+    }));
+
+    expect(attempts).toBe(2);
+    expect(getActiveAdapters().find((a) => a.name === 'flaky')).toBeDefined();
+  }, 10_000);
 });
 
 describe('channel registry — instance keying', () => {

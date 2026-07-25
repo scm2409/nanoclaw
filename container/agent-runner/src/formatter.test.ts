@@ -234,3 +234,53 @@ describe('stripInternalTags', () => {
     );
   });
 });
+
+describe('attachment rendering', () => {
+  it('renders a plain attachment hint with no transcript suffix', () => {
+    insertMessage('m-att-1', 'chat', {
+      sender: 'Alice',
+      text: '',
+      attachments: [{ type: 'file', name: 'report.pdf', localPath: 'inbox/m-att-1/report.pdf' }],
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('[file: report.pdf — saved to /workspace/inbox/m-att-1/report.pdf]');
+  });
+
+  it('inlines the transcript for a voice attachment that was auto-transcribed', () => {
+    insertMessage('m-att-2', 'chat', {
+      sender: 'Alice',
+      text: '',
+      attachments: [
+        {
+          type: 'voice',
+          name: 'note.ogg',
+          localPath: 'inbox/m-att-2/note.ogg',
+          isVoice: true,
+          transcript: 'hello from the voice note',
+        },
+      ],
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain(
+      '[voice: note.ogg — saved to /workspace/inbox/m-att-2/note.ogg — transcript: "hello from the voice note"]',
+    );
+  });
+
+  it('escapes XML-sensitive characters in the transcript', () => {
+    insertMessage('m-att-3', 'chat', {
+      sender: 'Alice',
+      text: '',
+      attachments: [
+        {
+          type: 'voice',
+          name: 'note.ogg',
+          localPath: 'inbox/m-att-3/note.ogg',
+          isVoice: true,
+          transcript: 'price is < 5 & > 1',
+        },
+      ],
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('transcript: "price is &lt; 5 &amp; &gt; 1"');
+  });
+});
