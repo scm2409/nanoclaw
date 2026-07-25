@@ -262,7 +262,7 @@ describe('attachment rendering', () => {
     });
     const result = formatMessages(getPendingMessages());
     expect(result).toContain(
-      '[voice: note.ogg — saved to /workspace/inbox/m-att-2/note.ogg — transcript: "hello from the voice note"]',
+      '[voice: note.ogg — saved to /workspace/inbox/m-att-2/note.ogg — auto-transcript (host speech-to-text): "hello from the voice note"]',
     );
   });
 
@@ -281,6 +281,6 @@ describe('attachment rendering', () => {
       ],
     });
     const result = formatMessages(getPendingMessages());
-    expect(result).toContain('transcript: "price is &lt; 5 &amp; &gt; 1"');
+    expect(result).toContain('auto-transcript (host speech-to-text): "price is &lt; 5 &amp; &gt; 1"');
   });
 });

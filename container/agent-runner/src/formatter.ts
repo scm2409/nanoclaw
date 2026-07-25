@@ -273,7 +273,13 @@ function formatAttachments(attachments: any[] | undefined): string {
     const type = a.type || 'file';
     const localPath = a.localPath ? `/workspace/${a.localPath}` : '';
     const url = a.url || '';
-    const transcriptSuffix = a.transcript ? ` — transcript: "${escapeXml(a.transcript)}"` : '';
+    // "auto-transcript (host speech-to-text)" — provenance label, documented
+    // in container/CLAUDE.md. Without it, agents correctly flagged the
+    // unexplained transcript text embedded in the message as a possible
+    // prompt injection and refused to act on the voice note's content.
+    const transcriptSuffix = a.transcript
+      ? ` — auto-transcript (host speech-to-text): "${escapeXml(a.transcript)}"`
+      : '';
     if (localPath) {
       return `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}${transcriptSuffix}]`;
     }

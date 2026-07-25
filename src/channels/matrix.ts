@@ -56,6 +56,7 @@ import type { ChannelDefaults } from './adapter.js';
 import { createChatSdkBridge } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
 import { restoreSnapshot, saveSnapshot } from './matrix-crypto-store.js';
+import { decryptMatrixAttachment, isEncryptedFile } from './matrix-media-crypto.js';
 
 /** How often the crypto store autosaves, in addition to save-on-shutdown —
  * bounds worst-case data loss (new megolm sessions, rotated keys) on an
@@ -102,6 +103,62 @@ function matrixIsVoiceAttachment(_att: Record<string, any>, raw: Record<string, 
   const content = typeof raw?.getContent === 'function' ? raw.getContent() : undefined;
   if (!content || typeof content !== 'object') return false;
   return 'org.matrix.msc3245.voice' in content || 'org.matrix.msc3245.voice.v2' in content;
+}
+
+/**
+ * Wrap the Matrix adapter so encrypted media attachments survive parsing.
+ *
+ * @beeper/chat-adapter-matrix@0.2.0's extractAttachments() only reads the
+ * plaintext `content.url` field. In an E2EE room, decrypted media events
+ * (m.image/m.audio/m.file/...) carry `content.file` instead — the mxc URL of
+ * the *ciphertext* plus AES-256-CTR key material. Result: every attachment
+ * in an encrypted room parsed to `attachments: []`, so voice notes reached
+ * the agent as a bare filename with no audio and no transcript.
+ *
+ * This override handles the `content.file` shape by reusing the adapter's own
+ * download machinery (createAttachmentFetcher: URL resolution + auth headers)
+ * and decrypting its result with the event's key material. Plaintext
+ * attachments keep going through the original path untouched.
+ */
+export function wrapWithEncryptedMedia(adapter: ReturnType<typeof createMatrixAdapter>): typeof adapter {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyAdapter = adapter as any;
+  const origExtract = anyAdapter.extractAttachments?.bind(adapter);
+  if (!origExtract) {
+    log.warn('Matrix adapter has no extractAttachments — encrypted media support disabled');
+    return adapter;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  anyAdapter.extractAttachments = (content: Record<string, any>) => {
+    const plain = origExtract(content);
+    if (Array.isArray(plain) && plain.length > 0) return plain;
+
+    const file = content?.file;
+    if (!isEncryptedFile(file)) return plain;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info: Record<string, any> = content.info && typeof content.info === 'object' ? content.info : {};
+    const mimeType = typeof info.mimetype === 'string' ? info.mimetype : undefined;
+    const downloadCiphertext = anyAdapter.createAttachmentFetcher?.(file.url);
+
+    return [
+      {
+        type: anyAdapter.attachmentTypeForContent?.(content, mimeType) ?? 'file',
+        url: file.url,
+        name: typeof content.body === 'string' && content.body ? content.body : undefined,
+        mimeType,
+        size: typeof info.size === 'number' ? info.size : undefined,
+        width: typeof info.w === 'number' ? info.w : undefined,
+        height: typeof info.h === 'number' ? info.h : undefined,
+        fetchData: downloadCiphertext
+          ? async () => decryptMatrixAttachment(await downloadCiphertext(), file)
+          : undefined,
+      },
+    ];
+  };
+
+  return adapter;
 }
 
 /**
@@ -318,7 +375,7 @@ registerChannelAdapter('matrix', {
       process.env.MATRIX_INVITE_AUTOJOIN = 'true';
     }
 
-    const matrixAdapter = wrapWithDmResolution(createMatrixAdapter());
+    const matrixAdapter = wrapWithDmResolution(wrapWithEncryptedMedia(createMatrixAdapter()));
     const bridge = createChatSdkBridge({
       adapter: matrixAdapter,
       concurrency: 'concurrent',

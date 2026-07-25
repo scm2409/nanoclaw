@@ -22,6 +22,11 @@
  *   MATRIX_HARNESS_PEER_ID     — optional; when set, opens a DM with this
  *                                 user (the real production bot) and posts
  *                                 MATRIX_HARNESS_PROBE_TEXT once synced
+ *   MATRIX_HARNESS_VOICE_FILE  — optional; path to an audio file to send to
+ *                                 MATRIX_HARNESS_PEER_ID as an ENCRYPTED
+ *                                 MSC3245 voice note (the exact shape Element
+ *                                 produces in an E2EE room), under the name
+ *                                 MATRIX_HARNESS_VOICE_NAME
  *   MATRIX_HARNESS_MAX_MS      — safety timeout before the harness exits on
  *                                 its own (default 90s)
  *
@@ -65,8 +70,9 @@ process.env.WEBHOOK_PORT = process.env.WEBHOOK_PORT ?? '0';
 
 const { createMatrixAdapter } = await import('@beeper/chat-adapter-matrix');
 const { createChatSdkBridge } = await import('../src/channels/chat-sdk-bridge.js');
-const { wrapWithDmResolution } = await import('../src/channels/matrix.js');
+const { wrapWithDmResolution, wrapWithEncryptedMedia } = await import('../src/channels/matrix.js');
 const { restoreSnapshot, saveSnapshot } = await import('../src/channels/matrix-crypto-store.js');
+const { encryptMatrixAttachment } = await import('../src/channels/matrix-media-crypto.js');
 const { initDb } = await import('../src/db/connection.js');
 
 // createChatSdkBridge's Chat SDK instance persists subscription state via
@@ -93,7 +99,7 @@ async function main(): Promise<void> {
     emit('RESTORE_THREW', String(err));
   }
 
-  const matrixAdapter = wrapWithDmResolution(createMatrixAdapter());
+  const matrixAdapter = wrapWithDmResolution(wrapWithEncryptedMedia(createMatrixAdapter()));
   const bridge = createChatSdkBridge({
     adapter: matrixAdapter,
     instance: 'matrix-live-test',
@@ -142,6 +148,43 @@ async function main(): Promise<void> {
       emit('PROBE_SENT', JSON.stringify(result ?? null));
     } catch (err) {
       emit('PROBE_FAILED', String(err));
+    }
+  }
+
+  const voiceFile = process.env.MATRIX_HARNESS_VOICE_FILE;
+  if (peerId && voiceFile) {
+    try {
+      const fs = await import('node:fs');
+      const plaintext = fs.readFileSync(voiceFile);
+      const voiceName = process.env.MATRIX_HARNESS_VOICE_NAME ?? 'voice-probe.wav';
+
+      // Resolve the DM room the same way outbound delivery does.
+      const resolvedThreadId = await (matrixAdapter as any).openDM(peerId);
+      const { roomID } = matrixAdapter.decodeThreadId(resolvedThreadId);
+      const client = (matrixAdapter as any).client;
+
+      // Encrypt-then-upload, exactly like a real client in an E2EE room:
+      // the *ciphertext* goes to the media repo, the key material rides in
+      // the (room-encrypted) event body under `file`.
+      const { ciphertext, file } = encryptMatrixAttachment(plaintext);
+      const upload = await client.uploadContent(ciphertext, {
+        type: 'application/octet-stream',
+        includeFilename: false,
+      });
+      const mxcUrl: string = upload.content_uri;
+
+      await client.sendEvent(roomID, 'm.room.message', {
+        msgtype: 'm.audio',
+        body: voiceName,
+        info: { mimetype: 'audio/wav', size: plaintext.length },
+        file: { ...file, url: mxcUrl, mimetype: 'audio/wav' },
+        // MSC3245 voice-note markers — what matrixIsVoiceAttachment keys on.
+        'org.matrix.msc3245.voice': {},
+        'org.matrix.msc1767.audio': {},
+      });
+      emit('VOICE_SENT', JSON.stringify({ roomID, mxcUrl, name: voiceName }));
+    } catch (err) {
+      emit('VOICE_FAILED', String(err instanceof Error ? (err.stack ?? err.message) : err));
     }
   }
 

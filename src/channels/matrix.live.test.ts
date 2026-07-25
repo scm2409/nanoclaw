@@ -206,6 +206,85 @@ describeIfCreds('Matrix live channel (real homeserver)', () => {
     await h2.killAndWaitExit();
   }, 550_000);
 
+  test('encrypted voice note: production bot transcribes it', async () => {
+    // Sends a real MSC3245 voice note — attachment encrypted with
+    // AES-256-CTR exactly like Element does in an E2EE room — to the live
+    // production bot, then asserts host-side that the transcription pipeline
+    // ran: the routed message in the test agent group's inbound.db must
+    // carry a non-empty `transcript` on the attachment. This covers, against
+    // the real server: encrypted-media extraction (wrapWithEncryptedMedia),
+    // download+decrypt (matrix-media-crypto), MSC3245 voice detection
+    // (matrixIsVoiceAttachment), staging, and OpenRouter transcription.
+    const voiceName = `voice-probe-${crypto.randomUUID().slice(0, 8)}.wav`;
+    const fixturePath = path.join(PROJECT_ROOT, 'src/channels/fixtures/matrix-voice-fixture.wav');
+    expect(fs.existsSync(fixturePath)).toBe(true);
+
+    const h = new Harness({
+      MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR,
+      MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID,
+      MATRIX_HARNESS_PEER_ID: env.MATRIX_USER_ID,
+      MATRIX_HARNESS_VOICE_FILE: fixturePath,
+      MATRIX_HARNESS_VOICE_NAME: voiceName,
+      MATRIX_HARNESS_MAX_MS: '320000',
+    });
+    await h.waitFor('SYNC_READY', 90_000);
+    await h.waitFor('VOICE_SENT', 60_000);
+
+    // Poll the production-side session DB (same host) for the routed message
+    // carrying our uniquely-named attachment WITH a transcript. The
+    // transcript is written before the message lands in inbound.db (router
+    // blocks on extractAndTranscribeAttachments), so its presence in the row
+    // is binary: either the whole pipeline worked or it didn't.
+    const { default: Database } = await import('better-sqlite3');
+    const sessionsRoot = path.join(PROJECT_ROOT, 'data/v2-sessions');
+    const deadline = Date.now() + 180_000;
+    let matchedContent: string | null = null;
+    while (Date.now() < deadline && !matchedContent) {
+      const dbPaths: string[] = [];
+      for (const group of fs.readdirSync(sessionsRoot)) {
+        const groupDir = path.join(sessionsRoot, group);
+        if (!fs.statSync(groupDir).isDirectory()) continue;
+        for (const sess of fs.readdirSync(groupDir)) {
+          const p = path.join(groupDir, sess, 'inbound.db');
+          if (fs.existsSync(p)) dbPaths.push(p);
+        }
+      }
+      for (const dbPath of dbPaths) {
+        try {
+          const db = new Database(dbPath, { readonly: true });
+          try {
+            const row = db
+              .prepare(`SELECT content FROM messages_in WHERE content LIKE ? LIMIT 1`)
+              .get(`%${voiceName}%`) as { content: string } | undefined;
+            if (row) matchedContent = row.content;
+          } finally {
+            db.close();
+          }
+        } catch {
+          // DB mid-write or locked — retry on the next poll tick.
+        }
+        if (matchedContent) break;
+      }
+      if (!matchedContent) await new Promise((r) => setTimeout(r, 3_000));
+    }
+
+    expect(matchedContent, 'voice-note message never appeared in any inbound.db').toBeTruthy();
+    const parsed = JSON.parse(matchedContent!) as {
+      attachments?: Array<{ name?: string; isVoice?: boolean; transcript?: string; localPath?: string }>;
+    };
+    const att = parsed.attachments?.find((a) => a.name === voiceName);
+    expect(att, 'attachment missing from routed message').toBeTruthy();
+    expect(att!.isVoice, 'attachment not flagged as voice').toBe(true);
+    expect(att!.localPath, 'attachment audio was not staged to disk').toBeTruthy();
+    expect(att!.transcript?.trim(), 'attachment has no transcript').toBeTruthy();
+
+    // The fixture says "NanoClaw voice transcription test, one two three" —
+    // assert loosely (espeak's robotic voice garbles the odd word).
+    expect(att!.transcript!.toLowerCase()).toMatch(/transcription|one two three|1 2 3/);
+
+    await h.killAndWaitExit();
+  }, 400_000);
+
   test('corrupted snapshot degrades gracefully (and covers from-scratch bootstrap)', async () => {
     const throwawayDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-matrix-live-'));
     const deviceId = `nanoclaw-livetest-throwaway-${crypto.randomUUID().slice(0, 8)}`;
