@@ -188,6 +188,19 @@ function ignoredPaths(root, relPaths) {
   }
 }
 
+// True if a commit's entire diff touches only FORK-CHANGELOG.md. Such a
+// commit can never name its own final sha in its own content — that's a
+// basic property of content hashing, not a gap to patch around — so a
+// changelog-only commit is exempt from the coverage requirement rather than
+// endlessly chased. It's metadata about an already-described change, not a
+// new one needing description.
+function isChangelogOnlyCommit(root, sha) {
+  const out = tryGit(['diff-tree', '--no-commit-id', '--name-only', '-r', sha], root);
+  if (out === null) return false;
+  const files = out.split('\n').filter(Boolean);
+  return files.length === 1 && files[0] === CHANGELOG_NAME;
+}
+
 function newCommits(root, baselineSha) {
   if (!baselineSha) return [];
   const head = tryGit(['rev-parse', 'HEAD'], root);
@@ -203,7 +216,8 @@ function newCommits(root, baselineSha) {
     .map((line) => {
       const tab = line.indexOf('\t');
       return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
-    });
+    })
+    .filter(({ sha }) => !isChangelogOnlyCommit(root, sha));
 }
 
 // Every bare sha and every `a..b` range in the changelog, expanded to full

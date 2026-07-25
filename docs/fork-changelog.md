@@ -61,3 +61,24 @@ Commits: <sha>, <sha> · vibecoded with <model>
 Write it as part of the work, before asking to commit — not as an
 afterthought once the hook blocks. The hook is a backstop, not the primary
 mechanism.
+
+## The self-reference trap
+
+A commit's sha is a hash of its own content, so a commit can never name its
+own final sha inside its own message or files — there's no way to know it
+until after the commit exists, and writing it in afterward changes the
+content, which changes the hash again. Don't try to chase this by repeatedly
+amending or adding "now update the sha" commits — it never converges.
+
+The actual workflow:
+
+1. Make the substantive commit(s) first. Get the real sha(s) from `git log`.
+2. Write (or fix) the changelog entry's `Commits:` line to name those shas.
+   If this edit happens in its own follow-up commit, that commit's diff
+   touches only `FORK-CHANGELOG.md` — the hook (`check-fork-changelog.mjs`,
+   `isChangelogOnlyCommit`) exempts any commit whose entire diff is that one
+   file from the coverage check, so it never needs to reference itself.
+
+A changelog-only commit is metadata about an already-described change, not a
+new change needing its own description — it's fine for its own sha to go
+unmentioned anywhere.

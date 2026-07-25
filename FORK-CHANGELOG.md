@@ -11,6 +11,27 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-25 — Fix an infinite loop in the fork-changelog SHA-coverage check
+
+While closing out the Matrix DM-resolution fix below, hit a real bug in the
+changelog convention itself: after committing the fix, I tried to update its
+`Commits:` line to name the commit's own sha, committed that, then had to
+update the line again to also cover *that* commit, and so on — a commit's sha
+is a hash of its own content, so a commit can never name its own final sha
+inside itself. Chased this three times before catching it.
+
+Fixed `check-fork-changelog.mjs`'s `newCommits()` (new `isChangelogOnlyCommit`
+helper): a commit whose entire diff touches only `FORK-CHANGELOG.md` is now
+exempt from the coverage requirement — it's metadata about an already-described
+change, not a new one needing its own description, so its own sha never needs
+to appear anywhere. Documented the workflow and the reasoning in
+`docs/fork-changelog.md`'s new "self-reference trap" section: make the
+substantive commit(s) first, then fix the `Commits:` line in a follow-up
+commit that touches only the changelog file — that commit is automatically
+exempt, so the chase terminates in exactly one extra commit instead of never.
+
+Commits: (pending) · vibecoded with Claude Sonnet 5
+
 ## 2026-07-25 — Matrix DM room resolution: stop trusting openDM() as the fallback authority
 
 Root-caused a recurring "reply lands in a new, unencrypted room after a reboot"
@@ -57,7 +78,7 @@ verifies it's active before restarting it. Confirmed the real host
 (`nanoclaw-v2-e1d62e67.service`) was never touched by the earlier failure, then
 re-ran the fixed test against it for real — passed in 41s.
 
-Commits: 9b52920..e373ef7 · vibecoded with Claude Sonnet 5
+Commits: 9b52920 · vibecoded with Claude Sonnet 5
 
 ## 2026-07-25 — Fork changelog + vibecoded disclosure
 
