@@ -35,7 +35,7 @@
  *     snapshot must never risk poisoning the reusable "main" device.
  */
 import { describe, test, expect, beforeAll } from 'vitest';
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { spawn, execSync, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { createInterface } from 'node:readline';
 import fs from 'node:fs';
@@ -72,6 +72,42 @@ interface HarnessEvent {
   payload?: string;
 }
 
+/**
+ * Extract the bare Matrix room id from an encoded thread id
+ * (`matrix:!abc%3Aserver` → `!abc:server`), so a room can be compared
+ * regardless of which side produced the id.
+ */
+function roomOf(threadId: string | undefined): string | undefined {
+  if (!threadId) return undefined;
+  const withoutPrefix = threadId.startsWith('matrix:') ? threadId.slice('matrix:'.length) : threadId;
+  // Encoded ids percent-escape the ':' separating localpart from server.
+  return decodeURIComponent(withoutPrefix).split(':').slice(0, 2).join(':');
+}
+
+/** Wait until `needle` appears in the host log after the current end-of-file. */
+async function waitForHostLog(needle: string, timeoutMs: number): Promise<void> {
+  const logPath = path.join(PROJECT_ROOT, 'logs/nanoclaw.log');
+  const startSize = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(logPath)) {
+      const size = fs.statSync(logPath).size;
+      if (size > startSize) {
+        const fd = fs.openSync(logPath, 'r');
+        try {
+          const buf = Buffer.alloc(size - startSize);
+          fs.readSync(fd, buf, 0, buf.length, startSize);
+          if (buf.toString('utf-8').includes(needle)) return;
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`Timed out waiting for host log line: ${needle}`);
+}
+
 class Harness {
   proc: ChildProcessByStdio<null, Readable, Readable>;
   events: HarnessEvent[] = [];
@@ -102,6 +138,33 @@ class Harness {
     // Surfaced on failure via captured stderr, not asserted on directly.
     createInterface({ input: this.proc.stderr }).on('line', (line) => {
       this.events.push({ event: 'STDERR', payload: line });
+    });
+  }
+
+  /**
+   * Wait for an event satisfying `pred`. Needed because the harness reports
+   * EVERY inbound message, including unrelated history the homeserver
+   * back-fills during initial sync — so "the first INBOUND" is not
+   * necessarily the reply we are waiting for.
+   */
+  waitForMatching(eventName: string, pred: (e: HarnessEvent) => boolean, timeoutMs: number): Promise<HarnessEvent> {
+    const matches = (e: HarnessEvent) => e.event === eventName && pred(e);
+    const already = this.events.find(matches);
+    if (already) return Promise.resolve(already);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters = this.waiters.filter((w) => w.resolve !== onEvent);
+        const seen = this.events
+          .filter((e) => e.event === eventName)
+          .map((e) => e.payload?.slice(0, 200))
+          .join('\n');
+        reject(new Error(`Timed out waiting for a matching ${eventName} after ${timeoutMs}ms. Seen:\n${seen}`));
+      }, timeoutMs);
+      const onEvent = (e: HarnessEvent) => {
+        clearTimeout(timer);
+        resolve(e);
+      };
+      this.waiters.push({ pred: matches, resolve: onEvent });
     });
   }
 
@@ -284,6 +347,76 @@ describeIfCreds('Matrix live channel (real homeserver)', () => {
 
     await h.killAndWaitExit();
   }, 400_000);
+
+  test('reply lands in the room the user wrote from, even after openDM cached another', async () => {
+    // The 2026-07-25 "typing indicator, then silence" incident. Sequence:
+    //   1. Host restarts -> the in-memory DM room cache is empty.
+    //   2. Something makes the host send FIRST (here: an injected message,
+    //      in the incident: an operator test). With a cold cache that falls
+    //      through to openDM, which resolves/creates room A and caches it.
+    //   3. The user writes from their real room B.
+    //   4. Every reply still goes to room A. The user sees the bot typing
+    //      and never receives an answer; the agent's replies pile up in a
+    //      room they never opened.
+    //
+    // The unit test in matrix-dm-resolution.test.ts asserts that confirmed
+    // inbound traffic overrides openDM's cache, and it passes — so this
+    // covers the integration the unit test cannot see: whether the inbound
+    // path actually reaches that cache in a running host.
+    //
+    // The assertion is deliberately end-to-end and room-exact: the harness
+    // must receive the reply IN THE SAME ROOM it wrote from. A reply routed
+    // anywhere else simply never arrives here, which is precisely the
+    // user-visible symptom.
+    const unitName = execSync(
+      "systemctl --user list-unit-files --no-legend | grep -i nanoclaw | awk '{print $1}' | head -1",
+      { encoding: 'utf-8' },
+    ).trim();
+    expect(unitName, 'could not resolve the nanoclaw systemd unit').toBeTruthy();
+
+    // Step 1 — cold cache.
+    execSync(`systemctl --user restart ${unitName}`);
+    await waitForHostLog('Matrix sync ready', 120_000);
+
+    // Step 2 — poison it: make the host send before any inbound arrives.
+    execSync(
+      `pnpm exec tsx src/cli/client.ts messaging-groups send --channel-type matrix ` +
+        `--platform-id ${JSON.stringify(`matrix:${env.MATRIX_TEST_USER_ID}`)} --instance matrix ` +
+        `--sender-id ${JSON.stringify(`matrix:${env.MATRIX_TEST_USER_ID}`)} --sender LiveTest ` +
+        `--text ${JSON.stringify('cache-poison probe, no reply needed')}`,
+      { cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 60_000 },
+    );
+    // Give the host time to run openDM and cache whatever it resolves.
+    await new Promise((r) => setTimeout(r, 20_000));
+
+    // Step 3 — the user's real message, from the test account's own room.
+    const probeText = `nanoclaw-live-roomcheck-${crypto.randomUUID()}`;
+    const h = new Harness({
+      MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR,
+      MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID,
+      MATRIX_HARNESS_PEER_ID: env.MATRIX_USER_ID,
+      MATRIX_HARNESS_PROBE_TEXT: probeText,
+      MATRIX_HARNESS_MAX_MS: '320000',
+    });
+    await h.waitFor('SYNC_READY', 90_000);
+    const sent = await h.waitFor('PROBE_SENT', 60_000);
+    const sentRoom = roomOf(JSON.parse(sent.payload ?? '{}').threadId);
+    expect(sentRoom, 'harness did not report the room it sent to').toBeTruthy();
+
+    // Step 4 — a reply must arrive in that same room. Matching on the room
+    // (rather than taking the first INBOUND) is deliberate: the homeserver
+    // back-fills unrelated history from other rooms during initial sync, and
+    // an earlier revision of this test failed on exactly that, blaming the
+    // routing for a stale message it had picked up by accident.
+    const inbound = await h.waitForMatching(
+      'INBOUND',
+      (e) => roomOf((JSON.parse(e.payload ?? '{}') as { threadId?: string }).threadId) === sentRoom,
+      300_000,
+    );
+    expect(roomOf((JSON.parse(inbound.payload ?? '{}') as { threadId?: string }).threadId)).toBe(sentRoom);
+
+    await h.killAndWaitExit();
+  }, 600_000);
 
   test('corrupted snapshot degrades gracefully (and covers from-scratch bootstrap)', async () => {
     const throwawayDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-matrix-live-'));

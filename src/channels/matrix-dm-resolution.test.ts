@@ -68,8 +68,15 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     );
     const wrapped = wrapWithDmResolution(adapter);
 
-    // Simulate the inbound message that warms the cache (chat-sdk-bridge.ts
-    // calls this synchronously before dispatching onInbound).
+    // Simulate the inbound message that warms the cache. This mirrors
+    // production ordering: chat-sdk-bridge.ts's warmInboundSenderCache runs
+    // the __onInboundSender hook FIRST, then calls channelIdFromThreadId.
+    // The hook is the only thing that may establish user -> room; see the
+    // comment on channelIdFromThreadId for why.
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!known:example.org',
+      '@user1:example.org',
+    );
     const channelId = wrapped.channelIdFromThreadId('!known:example.org');
     expect(channelId).toBe('matrix:@user1:example.org');
 
@@ -104,7 +111,10 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     );
     const wrapped = wrapWithDmResolution(adapter);
 
-    wrapped.channelIdFromThreadId('!left:example.org');
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!left:example.org',
+      '@user2:example.org',
+    );
     await wrapped.postMessage('matrix:@user2:example.org', { markdown: 'hi' });
 
     expect(openDM).toHaveBeenCalledWith('@user2:example.org');
@@ -144,6 +154,167 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     expect(postMessage).toHaveBeenCalledWith('!lazy:example.org', { markdown: 'hi' });
   });
 
+  it('a confirmed inbound room overrides a room openDM had previously cached', async () => {
+    // The 2026-07-25 incident, exactly: after a restart the host sent first
+    // with a cold cache, so resolveThreadId fell through to openDM, which
+    // picked a WRONG room (a stale/newly-created one) and cached it. The
+    // operator then wrote from their real room. Every reply still went to
+    // openDM's room, so the operator saw a typing indicator and silence
+    // while the agent's answers landed somewhere they never looked.
+    //
+    // Confirmed-inbound traffic is strictly better evidence than openDM's
+    // guess, so it must win — even when it arrives second.
+    const { adapter, openDM, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!wrong-room:example.org': {
+          id: '!wrong-room:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user5:example.org',
+        },
+        '!real-room:example.org': {
+          id: '!real-room:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user5:example.org',
+        },
+      },
+      '!wrong-room:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+
+    // 1. Cold cache: host sends first, openDM answers with the wrong room.
+    await wrapped.postMessage('matrix:@user5:example.org', { markdown: 'first' });
+    expect(openDM).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenLastCalledWith('!wrong-room:example.org', { markdown: 'first' });
+
+    // 2. The user's real message arrives from their actual room.
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!real-room:example.org',
+      '@user5:example.org',
+    );
+
+    // 3. The reply must now go to the real room, not openDM's stale guess.
+    await wrapped.postMessage('matrix:@user5:example.org', { markdown: 'reply' });
+    expect(postMessage).toHaveBeenLastCalledWith('!real-room:example.org', { markdown: 'reply' });
+    expect(openDM).toHaveBeenCalledTimes(1); // still only the cold-cache call
+  });
+
+  it('a later event in an OLD room must not revert the user to that room', async () => {
+    // Root cause of the 2026-07-25 "typing then silence" incident, caught in
+    // the host's own debug trace:
+    //   14:48:02.800  __onInboundSender  roomID=!new    (cache -> !new)
+    //   14:48:02.809  cache lookup       knownRoomId=!new
+    //   14:48:06.225  cache lookup       knownRoomId=!old   <- reverted
+    //                 sendEvent in !old
+    //
+    // channelIdFromThreadId wrote userToRoomCache on every event it resolved,
+    // including events in rooms the user had moved on from (and the bot's own
+    // echoes). So a single stray event in the abandoned room silently
+    // redirected every subsequent reply back into it.
+    //
+    // Mapping a room to its DM partner (roomToUserCache) is safe from any
+    // event. Deciding WHICH room a user is currently reachable in is not —
+    // that may only come from a confirmed inbound message from that user.
+    const { adapter, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!old:example.org': {
+          id: '!old:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user6:example.org',
+        },
+        '!new:example.org': {
+          id: '!new:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user6:example.org',
+        },
+      },
+      '!unused:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+    const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
+
+    // The user talks in the old room, then moves to the new one.
+    hook('!old:example.org', '@user6:example.org');
+    hook('!new:example.org', '@user6:example.org');
+
+    // A stray event resolves against the OLD room — an echo of the bot's own
+    // earlier message, or back-filled history during a sync.
+    expect(wrapped.channelIdFromThreadId('!old:example.org')).toBe('matrix:@user6:example.org');
+
+    // The next reply must still go to the room the user actually wrote from.
+    await wrapped.postMessage('matrix:@user6:example.org', { markdown: 'reply' });
+    expect(postMessage).toHaveBeenLastCalledWith('!new:example.org', { markdown: 'reply' });
+  });
+
+  it('a slow openDM must not clobber a room confirmed while it was in flight', async () => {
+    // The actual root cause of the 2026-07-25 outage, from the host's trace:
+    //   15:12:21.109  cacheSize=0                  -> openDM starts (slow)
+    //   15:12:45.410  __onInboundSender roomID=!new  (cache -> !new)
+    //   15:12:45.420  lookup            !new         correct
+    //   15:12:48.598  lookup            !stale        <- openDM landed
+    //                 sendEvent in !stale
+    //
+    // openDM can take tens of seconds (it may create and invite into a room).
+    // Its result was written to the cache unconditionally *after* the await,
+    // so a confirmed inbound that arrived meanwhile was silently overwritten
+    // — and every later reply went to the room openDM had invented.
+    //
+    // Confirmed inbound traffic outranks openDM's guess, whenever it arrives.
+    let releaseOpenDM: (() => void) | undefined;
+    const openDMGate = new Promise<void>((r) => {
+      releaseOpenDM = r;
+    });
+
+    const { adapter, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!stale:example.org': {
+          id: '!stale:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user7:example.org',
+        },
+        '!new:example.org': {
+          id: '!new:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user7:example.org',
+        },
+      },
+      '!stale:example.org',
+    );
+    // Make openDM hang until we release it, so the inbound lands mid-flight.
+    (adapter as unknown as { openDM: (h: string) => Promise<string> }).openDM = async () => {
+      await openDMGate;
+      return '!stale:example.org';
+    };
+
+    const wrapped = wrapWithDmResolution(adapter);
+    const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
+
+    // Cold cache: this send falls through to the (slow) openDM.
+    const inFlight = wrapped.postMessage('matrix:@user7:example.org', { markdown: 'first' });
+
+    // The user writes from their real room while openDM is still pending.
+    hook('!new:example.org', '@user7:example.org');
+
+    releaseOpenDM!();
+    await inFlight;
+
+    // Even the in-flight send should land in the confirmed room, not the
+    // room openDM resolved to after the fact.
+    expect(postMessage).toHaveBeenLastCalledWith('!new:example.org', { markdown: 'first' });
+
+    // And the cache must not have been reverted for subsequent sends.
+    await wrapped.postMessage('matrix:@user7:example.org', { markdown: 'second' });
+    expect(postMessage).toHaveBeenLastCalledWith('!new:example.org', { markdown: 'second' });
+  });
+
   it('startTyping also uses the confirmed-inbound room, bypassing openDM', async () => {
     const { adapter, openDM } = makeFakeAdapter(
       BOT_ID,
@@ -159,7 +330,10 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     );
     const wrapped = wrapWithDmResolution(adapter);
 
-    wrapped.channelIdFromThreadId('!known2:example.org');
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!known2:example.org',
+      '@user3:example.org',
+    );
     await wrapped.startTyping('matrix:@user3:example.org');
 
     expect(openDM).not.toHaveBeenCalled();

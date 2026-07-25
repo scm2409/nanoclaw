@@ -346,12 +346,38 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     log.info('Matrix: resolving DM room for user handle', { userHandle });
     const resolved = await adapter.openDM(userHandle);
 
+    // openDM can take tens of seconds — it may create a room and invite the
+    // user into it. A confirmed inbound message can easily land inside that
+    // window, and it is strictly better evidence than openDM's guess. Writing
+    // openDM's result unconditionally after the await clobbered exactly that,
+    // which is what took the operator's DM down on 2026-07-25:
+    //   15:12:21  cacheSize=0                    -> openDM starts
+    //   15:12:45  __onInboundSender roomID=!new  -> cache corrected
+    //   15:12:48  openDM lands                   -> cache reverted to !stale
+    // Every reply then went to a room the user never had open, so they saw a
+    // typing indicator and nothing else.
+    //
+    // So: re-read the cache after the await. If a confirmed inbound claimed a
+    // different room meanwhile, that room wins — for the cache AND for this
+    // very send, which is still in flight and would otherwise be misrouted.
     try {
       const { roomID } = adapter.decodeThreadId(resolved);
       roomToUserCache.set(roomID, userHandle);
+
+      const confirmedMeanwhile = userToRoomCache.get(userHandle);
+      if (confirmedMeanwhile && confirmedMeanwhile !== roomID) {
+        log.info('Matrix: inbound confirmed a different room while openDM was in flight, preferring it', {
+          userHandle,
+          openDmRoom: roomID,
+          confirmedRoom: confirmedMeanwhile,
+        });
+        return adapter.encodeThreadId({ roomID: confirmedMeanwhile });
+      }
+
       userToRoomCache.set(userHandle, roomID);
-    } catch {
+    } catch (err) {
       // decode failure is non-fatal — outbound still works
+      log.debug('Matrix: could not decode openDM result', { userHandle, err });
     }
 
     return resolved;
@@ -359,16 +385,30 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
 
   // Rewrite inbound room-based channel IDs to user-handle form for DM rooms.
   // Non-DM rooms pass through unchanged.
+  //
+  // Deliberately populates roomToUserCache ONLY, never userToRoomCache.
+  // "Which DM partner does this room belong to" is a stable property of the
+  // room and safe to learn from any event. "Which room is this user
+  // currently reachable in" is not — and this function runs for every event
+  // it resolves, including ones in rooms the user has moved on from and the
+  // bot's own echoes.
+  //
+  // Writing userToRoomCache here caused the 2026-07-25 outage: the operator's
+  // reply room was correctly cached from their inbound message, then a stray
+  // event in an older room reverted it 3.4s later, and every reply after that
+  // went to a room they never had open. They saw the bot typing, then
+  // silence. The host's own debug trace:
+  //   14:48:02.800  __onInboundSender  roomID=!new   (cache -> !new)
+  //   14:48:06.225  cache lookup       knownRoomId=!old  <- reverted
+  // userToRoomCache is now written only from confirmed inbound traffic
+  // (__onInboundSender) and from openDM's own result when nothing is known.
   adapter.channelIdFromThreadId = (threadId: string): string => {
     try {
       const { roomID } = adapter.decodeThreadId(threadId);
       if (!roomID.startsWith('!')) return origChannelIdFromThreadId(threadId);
 
       const cached = roomToUserCache.get(roomID);
-      if (cached) {
-        userToRoomCache.set(cached, roomID);
-        return `matrix:${cached}`;
-      }
+      if (cached) return `matrix:${cached}`;
 
       // Not cached — check if this is a DM by membership count
       const client = (adapter as any).client;
@@ -381,7 +421,6 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
       if (!otherMember) return origChannelIdFromThreadId(threadId);
 
       roomToUserCache.set(roomID, otherMember.userId);
-      userToRoomCache.set(otherMember.userId, roomID);
       return `matrix:${otherMember.userId}`;
     } catch {
       return origChannelIdFromThreadId(threadId);
