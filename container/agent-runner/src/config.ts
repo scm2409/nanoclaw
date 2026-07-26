@@ -19,6 +19,7 @@ export interface RunnerConfig {
   model?: string;
   effort?: string;
   logSubagents?: boolean;
+  showTokenUsage?: boolean;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -49,6 +50,7 @@ export function loadConfig(): RunnerConfig {
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
     logSubagents: raw.logSubagents === true,
+    showTokenUsage: raw.showTokenUsage === true,
   };
 
   return _config;

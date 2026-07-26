@@ -485,6 +485,58 @@ describe('subagent logging notice', () => {
   });
 });
 
+/** Build a query that yields init, then a result carrying per-model token usage. */
+function makeTokenUsageQuery(): { query: AgentQuery; pushes: string[] } {
+  const pushes: string[] = [];
+  async function* events(): AsyncGenerator<ProviderEvent> {
+    yield { type: 'init', continuation: 'sess-1' };
+    yield {
+      type: 'result',
+      text: null,
+      modelUsage: {
+        sonnet: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, costUSD: 0.08 },
+        haiku: { inputTokens: 300, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.01 },
+      },
+    };
+  }
+  return {
+    pushes,
+    query: {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    },
+  };
+}
+
+describe('token usage notice', () => {
+  it('delivers a chat notice summarizing tokens and cost per model when showTokenUsage is on', async () => {
+    const { query, pushes } = makeTokenUsageQuery();
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, false, true);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const text = JSON.parse(out[0].content).text as string;
+    expect(text).toContain('sonnet: 1,250 ($0.08)');
+    expect(text).toContain('haiku: 400 ($0.01)');
+    expect(out[0].platform_id).toBe('chan-1');
+    // Side-channel write, never a push into the agent's own SDK stream.
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('stays silent when showTokenUsage is off (the default)', async () => {
+    const { query } = makeTokenUsageQuery();
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+});
+
 describe('isCorruptionError', () => {
   it('matches the Docker Desktop macOS torn-read symptom', () => {
     expect(isCorruptionError('database disk image is malformed')).toBe(true);

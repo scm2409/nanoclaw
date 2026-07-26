@@ -112,3 +112,28 @@ describe('task_started subagent translation', () => {
     expect(subagentEvents[0]!.model).toBe('sonnet');
   });
 });
+
+describe('result modelUsage translation', () => {
+  it('passes the SDK result message\'s modelUsage through unchanged on the result event', async () => {
+    sdkMessages.length = 0;
+    supportedAgentsResult = [];
+    const modelUsage = {
+      sonnet: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.08 },
+    };
+    sdkMessages.push(
+      { type: 'system', subtype: 'init', session_id: 'sess-1' },
+      { type: 'result', subtype: 'success', result: '<message to="user">done</message>', modelUsage },
+    );
+
+    const provider = new ClaudeProvider({});
+    provider.registerMemorySessionHook(MEMORY_SESSION_HOOK);
+    const q = provider.query({ prompt: 'hi', cwd: tmp });
+
+    const events: { type: string; modelUsage?: unknown }[] = [];
+    for await (const e of q.events) events.push(e as { type: string; modelUsage?: unknown });
+
+    const resultEvent = events.find((e) => e.type === 'result');
+    expect(resultEvent).toBeDefined();
+    expect(resultEvent!.modelUsage).toEqual(modelUsage);
+  });
+});

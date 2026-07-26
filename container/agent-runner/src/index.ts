@@ -113,6 +113,7 @@ async function main(): Promise<void> {
     cwd: CWD,
     systemContext: { instructions },
     logSubagents: config.logSubagents,
+    showTokenUsage: config.showTokenUsage,
   });
 }
 

@@ -89,6 +89,15 @@ export interface PollLoopConfig {
    * --log-subagents true`).
    */
   logSubagents?: boolean;
+  /**
+   * When true, delivers a short chat notice ("📊 Tokens: ...") after each
+   * completed turn, summing tokens and USD cost per model used during that
+   * turn (main model + any subagents) — same side-channel write straight to
+   * messages_out as `logSubagents`, never pushed into the agent's own SDK
+   * stream. Off by default; toggled via container.json (`ncl groups config
+   * update --show-token-usage true`).
+   */
+  showTokenUsage?: boolean;
 }
 
 /**
@@ -268,6 +277,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         prompt,
         continuation,
         config.logSubagents,
+        config.showTokenUsage,
       );
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
@@ -358,6 +368,7 @@ export async function processQuery(
   initialPrompt: string,
   initialContinuation: string | undefined,
   logSubagents = false,
+  showTokenUsage = false,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -507,6 +518,7 @@ export async function processQuery(
         // Claude session with no prior context.
         setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
+        if (showTokenUsage && event.modelUsage) deliverTokenUsageNotice(event.modelUsage, routing);
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
         // stale 'processing' claims while the query stays open for
@@ -640,6 +652,34 @@ function deliverSubagentNotice(
     channel_type: routing.channelType,
     thread_id: routing.threadId,
     content: JSON.stringify({ text: `🔎 Subagent: ${event.subagentType} (Modell: ${event.model})${detail}` }),
+  });
+}
+
+/**
+ * Deliver a live notice summarizing per-model token/cost usage for the turn
+ * that just completed, when `showTokenUsage` is enabled. Written straight to
+ * messages_out — never `query.push()` — same side-channel contract as
+ * `deliverSubagentNotice`.
+ */
+function deliverTokenUsageNotice(
+  modelUsage: Record<
+    string,
+    { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number; costUSD: number }
+  >,
+  routing: RoutingContext,
+): void {
+  const lines = Object.entries(modelUsage).map(([model, u]) => {
+    const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
+    return `${model}: ${total.toLocaleString()} ($${u.costUSD.toFixed(2)})`;
+  });
+  writeMessageOut({
+    id: generateId(),
+    in_reply_to: routing.inReplyTo,
+    kind: 'chat',
+    platform_id: routing.platformId,
+    channel_type: routing.channelType,
+    thread_id: routing.threadId,
+    content: JSON.stringify({ text: `📊 Tokens: ${lines.join(' · ')}` }),
   });
 }
 

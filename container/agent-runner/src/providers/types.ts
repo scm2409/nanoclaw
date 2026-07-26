@@ -127,8 +127,26 @@ export type ProviderEvent =
    * turn as an error (e.g. a non-retryable Anthropic 403 billing_error). The
    * poll-loop uses it to surface the result text to the user instead of
    * dropping it as un-wrapped scratchpad, and to skip the re-wrap nudge.
+   *
+   * `modelUsage` is the SDK's per-model token/cost breakdown for this turn,
+   * aggregated across the main model and any subagents invoked during it.
+   * Optional — only providers backed by an SDK that reports it populate this.
    */
-  | { type: 'result'; text: string | null; isError?: boolean }
+  | {
+      type: 'result';
+      text: string | null;
+      isError?: boolean;
+      modelUsage?: Record<
+        string,
+        {
+          inputTokens: number;
+          outputTokens: number;
+          cacheReadInputTokens: number;
+          cacheCreationInputTokens: number;
+          costUSD: number;
+        }
+      >;
+    }
   | { type: 'error'; message: string; retryable: boolean; classification?: string }
   | { type: 'progress'; message: string }
   /**

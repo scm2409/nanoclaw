@@ -11,6 +11,23 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — Optional per-response token-usage summary notice
+
+Added a second opt-in, off-by-default diagnostic notice alongside the existing
+`log_subagents` one: `show_token_usage` (`ncl groups config update --show-token-usage true`).
+When enabled, after each completed turn the agent's channel gets a side-channel
+`📊 Tokens: ...` line summing input+output+cache tokens and USD cost per model used during
+that turn (main model and any subagents invoked within it) — sourced from the Claude Agent
+SDK's `modelUsage` field on the `result` message, which `claude.ts` previously discarded when
+narrowing the message type. Built by copying the `log_subagents` plumbing pattern exactly: new
+`show_token_usage` column (migration 021), threaded through `container-configs.ts`,
+`container-config.ts`, the `ncl groups config update` CLI handler, the container runner's
+`config.ts`/`index.ts`, and gated in `poll-loop.ts`'s `result`-event handling via a new
+`deliverTokenUsageNotice` (mirrors `deliverSubagentNotice` — a direct `writeMessageOut`, never
+`query.push()`, so it can't influence the agent's own context).
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-26 — `.claude/agents/*.md` subagent files were silently unusable
 
 While verifying the subagent-logging feature below, the log stayed silent for every web-research

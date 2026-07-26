@@ -304,3 +304,48 @@ describe('groups config update --log-subagents', () => {
     expect(bad.ok).toBe(false);
   });
 });
+
+describe('groups config update --show-token-usage', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  it('is off (NULL) for a freshly created config row', () => {
+    const GID = 'ag-show-token-usage-default';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+    expect(getContainerConfig(GID)!.show_token_usage).toBeNull();
+  });
+
+  it('flips to on and back to off via the CLI, and rejects a non-boolean value', async () => {
+    const GID = 'ag-show-token-usage';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    const on = await dispatch(
+      { id: 'r1', command: 'groups-config-update', args: { id: GID, 'show-token-usage': 'true' } },
+      { caller: 'host' },
+    );
+    expect(on.ok).toBe(true);
+    expect(getContainerConfig(GID)!.show_token_usage).toBe(1);
+
+    const off = await dispatch(
+      { id: 'r2', command: 'groups-config-update', args: { id: GID, 'show-token-usage': 'false' } },
+      { caller: 'host' },
+    );
+    expect(off.ok).toBe(true);
+    expect(getContainerConfig(GID)!.show_token_usage).toBe(0);
+
+    const bad = await dispatch(
+      { id: 'r3', command: 'groups-config-update', args: { id: GID, 'show-token-usage': 'yes' } },
+      { caller: 'host' },
+    );
+    expect(bad.ok).toBe(false);
+  });
+});
