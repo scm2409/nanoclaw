@@ -71,6 +71,19 @@ Add a matching test at each existing test file's location (`poll-loop.test.ts`, 
 provider tests), following that file's existing test style — don't introduce a second testing
 convention alongside an established one.
 
+## Group persona/instructions — edit the source, never the generated fragment
+
+A group's persona/behavioral instructions live in `groups/<folder>/instructions.prepend.md`.
+**Never edit `groups/<folder>/.claude-fragments/persona.md` directly** — it is a generated
+copy. `composeGroupClaudeMd()` (`src/claude-md-compose.ts`) calls `readGroupPersona()`
+(`src/group-persona.ts`, reads `instructions.prepend.md`) and overwrites the fragment from it
+on every container spawn. A direct edit to the fragment survives only until the next
+`ncl groups restart` (or natural respawn), then silently reverts to whatever
+`instructions.prepend.md` still says — this has happened twice now. If a "file modified
+externally" notice appears for a `.claude-fragments/*` file right after a restart, that's this
+regeneration overwriting your edit, not a real external change — re-apply it to
+`instructions.prepend.md` instead of trusting the fragment.
+
 ## Self-verify before saying "ready to test" — the rule that keeps getting missed
 
 Two recorded incidents of declaring a change done/ready without actually exercising it
@@ -117,6 +130,22 @@ Before telling the user anything is ready:
 - `ncl groups config update ...` changes save to the DB but don't take effect for an
   already-running container until `ncl groups restart --id <group>` — or the next natural
   respawn, which re-materializes `container.json` from the DB automatically.
+- **`ncl groups restart --id <group> --message "..."` used to be able to seed a runaway
+  self-loop** on a group with `showTokenUsage` or `logSubagents` enabled — fixed 2026-07-26, but
+  understand the mechanism before treating `--message` restarts as free. The `on_wake` row a
+  `--message` restart writes is stamped `channel_type: 'agent'`, `platform_id: <own group id>`
+  (the same shape as a legitimate internal agent-to-agent note). `poll-loop.ts`'s side-channel UI
+  notices (subagent/token-usage/error) used to blindly reuse that routing context — so the
+  turn's own notice got delivered right back into the *same session's* inbound queue as a fresh
+  `channel_type: 'agent'` row, which the follow-up poller pushed into the still-open query as a
+  new turn, whose notice repeated the cycle. Self-sustaining, no external trigger needed. Two
+  such restarts on `main-agent` each independently burned several million tokens over ~7 minutes
+  before tripping the account's monthly spend cap. **Do not attribute a cost spike to "restarting
+  invalidates the prompt cache"** — that was the first (wrong) theory here, ruled out because the
+  user restarts routinely without ever seeing this; the real cause was the routing bug above,
+  now fixed in `poll-loop.ts` (`isAgentToAgentRoute()` guards all three notice functions) with
+  regression tests. Plain `ncl groups restart` with no `--message` was never affected — it
+  doesn't write that `on_wake` row at all.
 
 ## Matrix live E2E suite
 

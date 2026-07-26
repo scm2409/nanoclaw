@@ -411,6 +411,25 @@ const ERR_ROUTING = {
   inReplyTo: 'm1',
 };
 
+// Reproduces the routing shape of an agent-to-agent inbound row (including a
+// container's own on_wake restart message, which agent-route.ts always
+// stamps with channel_type 'agent' + platform_id = the group's own id — see
+// container-runner.ts / agent-route.ts:344). A side-channel notice
+// (subagent/token-usage/error) that blindly reuses this routing context and
+// gets delivered would itself become a fresh channel_type:'agent' inbound
+// row (self-messages are always allowed), which produces its own notice,
+// which delivers again — a self-sustaining loop with no external trigger
+// needed. Live incident: two `ncl groups restart --message ...` calls (which
+// write exactly this on_wake shape) each seeded this loop, racking up
+// millions of tokens over several minutes before the account's monthly
+// spend cap stopped it.
+const AGENT_ROUTING = {
+  platformId: 'ag-self',
+  channelType: 'agent',
+  threadId: null,
+  inReplyTo: 'm1',
+};
+
 describe('error result with no <message> envelope', () => {
   it('delivers a budget/billing error to the triggering channel and does not nudge', async () => {
     const budgetText = 'Spending limit reached. Add your own key at https://example.com/keys';
@@ -427,6 +446,15 @@ describe('error result with no <message> envelope', () => {
     expect(pushes).toHaveLength(0);
   });
 
+  it('stays silent on an agent-to-agent (self) route instead of feeding the loop', async () => {
+    const budgetText = 'Spending limit reached. Add your own key at https://example.com/keys';
+    const { query } = makeResultQuery({ type: 'result', text: budgetText, isError: true });
+
+    await processQuery(query, AGENT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+
   it('still nudges (and does not deliver) a normal unwrapped result', async () => {
     const { query, pushes } = makeResultQuery({ type: 'result', text: 'bare text, no envelope' });
 
@@ -435,6 +463,41 @@ describe('error result with no <message> envelope', () => {
     expect(getUndeliveredMessages()).toHaveLength(0);
     expect(pushes).toHaveLength(1);
     expect(pushes[0]).toContain('was not delivered');
+  });
+
+  it('aborts instead of re-delivering when the SDK repeats an identical error result forever', async () => {
+    // Reproduces a live incident: once an account hits its monthly spend
+    // cap, the SDK's own internal retry kept re-emitting the exact same
+    // isError 'result' every ~1-2s, and the old code faithfully forwarded
+    // every single one — 180+ duplicate chat messages before the container
+    // was killed by hand. The loop must recognize an immediate repeat and
+    // stop instead of relaying it forever.
+    const spendCapText = "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage";
+    const pushes: string[] = [];
+    let abortCalls = 0;
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 'sess-1' };
+      for (let i = 0; i < 20; i++) {
+        yield { type: 'result', text: spendCapText, isError: true };
+      }
+    }
+    const query: AgentQuery = {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {
+        abortCalls++;
+      },
+    };
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe(spendCapText);
+    expect(abortCalls).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -480,6 +543,14 @@ describe('subagent logging notice', () => {
     const { query } = makeSubagentQuery();
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+
+  it('stays silent on an agent-to-agent (self) route even when logSubagents is on', async () => {
+    const { query } = makeSubagentQuery();
+
+    await processQuery(query, AGENT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, true);
 
     expect(getUndeliveredMessages()).toHaveLength(0);
   });
@@ -532,6 +603,14 @@ describe('token usage notice', () => {
     const { query } = makeTokenUsageQuery();
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+
+  it('stays silent on an agent-to-agent (self) route even when showTokenUsage is on', async () => {
+    const { query } = makeTokenUsageQuery();
+
+    await processQuery(query, AGENT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, false, true);
 
     expect(getUndeliveredMessages()).toHaveLength(0);
   });

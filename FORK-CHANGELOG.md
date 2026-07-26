@@ -11,6 +11,76 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — Fix a self-sustaining agent-to-agent notice loop, and a duplicate-error relay bug
+
+Incident, corrected root cause (an earlier version of this entry blamed prompt-cache
+invalidation from restarting a long resumed session — wrong; ruled out after the user pointed
+out they restart routinely all weekend without ever seeing this, which is decisive evidence
+against a generic restart-cost theory). The actual mechanism, confirmed from the session DB:
+`ncl groups restart --message "..."` writes its `on_wake` row with `channel_type: 'agent'` and
+`platform_id` set to the group's own id (`agent-route.ts`'s "self-messages are always allowed"
+convention, meant for legitimate internal follow-ups). `poll-loop.ts`'s side-channel UI
+notices (`deliverSubagentNotice`, `deliverTokenUsageNotice`, `deliverErrorResult`) blindly
+reused that same routing context. Once the triggering message carried `channel_type: 'agent'`,
+every notice generated in response was itself delivered as a fresh `channel_type: 'agent'` row
+straight back into the *same session's* inbound queue — which the follow-up poller then pushed
+into the still-open query as a new turn, whose own notice repeated the cycle. Self-sustaining,
+no external trigger needed, and specific to `--message` restarts on a group with
+`showTokenUsage`/`logSubagents` enabled — which is exactly why routine `ncl groups restart`
+(no `--message`) never triggered it. Two such restarts on `main-agent` (the second only needed
+because an edit had landed in the wrong file — see below) each independently seeded the loop,
+running up several million tokens over about 7 minutes before tripping the account's monthly
+spend cap.
+
+Fixed in `container/agent-runner/src/poll-loop.ts`: added `isAgentToAgentRoute()` and guarded
+all three notice functions with it — a side-channel notice is never delivered when the
+triggering route's `channel_type` is `'agent'` (nothing is lost; there's no human watching an
+agent-to-agent route anyway). Added three regression tests reproducing the loop's routing shape
+(`AGENT_ROUTING`, mirroring a real a2a/on_wake inbound row) and asserting each notice type stays
+silent on it.
+
+Separately, and still worth keeping: once *any* terminal error genuinely repeats (e.g. the
+SDK's own internal retry against an already-exhausted spend cap), the old code relayed every
+identical repeat as a fresh duplicate message forever. `processQuery` now tracks the last
+delivered error-result text and, on an immediate identical repeat, delivers nothing further,
+calls `query.abort()`, and breaks out of the event loop instead of continuing to consume the
+stuck stream. Regression test reproduces this too (a mock provider yielding 20 identical
+`isError` results → asserts exactly one gets delivered).
+
+vibecoded with Claude Sonnet 5
+
+## 2026-07-26 — Document the persona file gotcha in `nanoclaw-coding`
+
+During the same incident, the first restart was needed only because a persona edit had landed
+in `groups/main-agent/.claude-fragments/persona.md` — a generated copy that
+`composeGroupClaudeMd()` silently overwrites from `groups/main-agent/instructions.prepend.md`
+on every container spawn — instead of the real source file, and reverted on the next spawn.
+Added a "Group persona/instructions" section to `.claude/skills/nanoclaw-coding/SKILL.md`
+documenting the correct file and the regeneration behavior, so this doesn't happen a third
+time.
+
+vibecoded with Claude Sonnet 5
+
+## 2026-07-26 — `smart` escalation subagent for main-agent
+
+Added `groups/main-agent/.claude/agents/smart.md`, a Task-tool subagent that runs on `opus` (vs.
+the group's default `sonnet`) with no `tools:` restriction — it inherits the full tool set,
+including `Task` itself (so it can call `websearch`) and the `ask_user_question` MCP tool (so it
+isn't strictly one-shot). Added a matching section to
+`groups/main-agent/instructions.prepend.md` (the actual persona source —
+`.claude-fragments/persona.md` is a generated copy `composeGroupClaudeMd()` overwrites from it on
+every container spawn, learned the hard way after a first edit landed in the wrong file and got
+silently reverted by the next restart) instructing the main agent to always ask the
+user before delegating to `smart` on genuinely complex tasks (architecture decisions, multi-file
+debugging, ambiguous requirements) — never silently escalate — and to optionally let the user pick
+a different model per call via the Task tool's per-invocation `model` override, rather than editing
+the subagent file. Also enabled `log_subagents` on the group (`ncl groups config update --id
+ag-1784455694582-5kfscx --log-subagents true`) so escalation is visible in-chat as a
+"🔎 Subagent: smart (Modell: opus)" notice. Requested by the user, who wanted a stronger-model
+fallback for hard tasks without permanently raising the main chat's default model.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-26 — Document how to switch an agent group's model
 
 Added a "Switching the Model an Agent Group Uses" section to `.claude/skills/customize/SKILL.md`,

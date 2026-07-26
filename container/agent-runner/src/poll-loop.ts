@@ -62,6 +62,26 @@ function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * True when the triggering inbound row was an agent-to-agent message
+ * (`channel_type: 'agent'`) — this includes a container's own `on_wake`
+ * restart message, which agent-route.ts always stamps with `channel_type:
+ * 'agent'` + `platform_id` set to the group's own id ("self-messages are
+ * always allowed", agent-route.ts). Side-channel UI notices
+ * (subagent/token-usage/error) must never be delivered on this route: doing
+ * so writes a fresh `channel_type: 'agent'` row right back into the SAME
+ * session's inbound queue (self a2a delivery), which the follow-up poller
+ * then pushes into the still-open query as a new turn — whose own notice
+ * repeats the cycle. Live incident: two `ncl groups restart --message ...`
+ * calls each seeded exactly this loop, racking up several million tokens
+ * over ~7 minutes before the account's monthly spend cap intervened. There
+ * is no human watching an agent-to-agent route anyway, so dropping the
+ * notice loses nothing.
+ */
+function isAgentToAgentRoute(routing: RoutingContext): boolean {
+  return routing.channelType === 'agent';
+}
+
 export interface PollLoopConfig {
   provider: AgentProvider;
   /**
@@ -376,6 +396,12 @@ export async function processQuery(
   // Once-per-turn guard for the task-run "<message> block was not delivered"
   // nudge — mirrors unwrappedNudged for chat turns.
   let taskBlockNudged = false;
+  // Tracks the last delivered error-result text so an SDK-internal retry loop
+  // (observed live: an account-level spend-cap rejection kept re-emitting an
+  // identical isError 'result' every ~1-2s, 180+ times, each one faithfully
+  // relayed as a fresh chat message) gets caught after one delivery instead
+  // of spammed forever.
+  let lastDeliveredErrorText: string | null | undefined;
   // Prompt queue for the exchange hook — each result event consumes the
   // oldest unanswered prompt, except a wrapping-retry result, which answers
   // the same prompt again. Unused (and unmaintained) when the provider
@@ -536,10 +562,30 @@ export async function processQuery(
           // second run summary.
           if (routing.taskRun && !taskBlockNudged) autoAppendTaskLog(event.text);
           if (sent === 0 && event.isError === true && !routing.taskRun) {
+            if (event.text === lastDeliveredErrorText) {
+              // The provider is stuck re-emitting the exact same error result
+              // (e.g. an account-level spend cap the SDK keeps retrying against
+              // internally) — one delivery already told the user; relaying the
+              // same text again and again would just spam the chat and hold the
+              // container "active" (the heartbeat touch above never lets
+              // host-sweep's stale check fire) for as long as the provider
+              // keeps going. Abort and stop consuming this stream.
+              log(`Identical error result repeated — aborting instead of re-delivering: ${event.text?.slice(0, 120)}`);
+              notifyExchangeComplete(onExchangeComplete, {
+                prompt: archivePrompts[0] ?? initialPrompt,
+                result: event.text,
+                continuation: queryContinuation ?? initialContinuation,
+                status: 'error',
+              });
+              archivePrompts.shift();
+              query.abort();
+              break;
+            }
             // Non-retryable error turn (e.g. a 403 billing_error) with no
             // <message> envelope: deliver the notice instead of dropping it as
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
             // the failing gateway turn after turn.
+            lastDeliveredErrorText = event.text;
             deliverErrorResult(event.text, routing);
             notifyExchangeComplete(onExchangeComplete, {
               prompt: archivePrompts[0] ?? initialPrompt,
@@ -643,6 +689,7 @@ function deliverSubagentNotice(
   event: { subagentType: string; model: string; description?: string },
   routing: RoutingContext,
 ): void {
+  if (isAgentToAgentRoute(routing)) return;
   const detail = event.description ? ` — ${event.description}` : '';
   writeMessageOut({
     id: generateId(),
@@ -668,6 +715,7 @@ function deliverTokenUsageNotice(
   >,
   routing: RoutingContext,
 ): void {
+  if (isAgentToAgentRoute(routing)) return;
   const lines = Object.entries(modelUsage).map(([model, u]) => {
     const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
     return `${model}: ${total.toLocaleString()} ($${u.costUSD.toFixed(2)})`;
@@ -691,6 +739,7 @@ function deliverTokenUsageNotice(
  * `Error:` prefix — the provider's text is already a user-facing message.
  */
 function deliverErrorResult(text: string, routing: RoutingContext): void {
+  if (isAgentToAgentRoute(routing)) return;
   log('Error result with no <message> envelope — delivering to channel');
   writeMessageOut({
     id: generateId(),
