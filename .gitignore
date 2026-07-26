@@ -11,8 +11,20 @@ store/
 data/
 logs/
 
-# Groups - per-installation state, not tracked
+# Groups - per-installation state, not tracked, EXCEPT the capability config
+# that makes this fork actually *ours*: standing persona and custom Task-tool
+# subagents. Those survive a fresh clone/reinstall and are part of this
+# fork's history like any other change. Explicitly still excluded: chat
+# transcripts (conversations/), personal memory (memory/), and anything
+# regenerated at spawn time (CLAUDE.md, container.json, .claude-fragments/ —
+# the last one is already excluded below).
 groups/*
+!groups/*/
+groups/*/*
+!groups/*/instructions.prepend.md
+!groups/*/.claude/
+groups/*/.claude/*
+!groups/*/.claude/agents/
 
 # Composer-managed CLAUDE.md artifacts (regenerated every spawn) and
 # per-group memory (CLAUDE.local.md) must never be committed.
