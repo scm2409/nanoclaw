@@ -11,6 +11,19 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — Document how to switch an agent group's model
+
+Added a "Switching the Model an Agent Group Uses" section to `.claude/skills/customize/SKILL.md`,
+covering the `ncl groups config update --id <group-id> --model sonnet` + `ncl groups restart`
+flow, why short SDK aliases (`sonnet`/`opus`/`haiku`) are preferable to dated snapshot ids, and
+the restart gotcha where `groups/<folder>/container.json` only re-materializes on the next actual
+container spawn (not immediately at kill time) — verify via the DB instead. Prompted by walking
+the user through pinning the Matrix-wired main chat's model to `sonnet` after confirming it had
+no relation to the model running this Claude Code CLI session, and them asking to capture the
+procedure for next time.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-26 — `nanoclaw-coding` meta-skill for hands-on repo work
 
 Added `.claude/skills/nanoclaw-coding/SKILL.md`, a project-level Claude Code skill (not a

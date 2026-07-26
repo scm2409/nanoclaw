@@ -76,6 +76,17 @@ Implementation:
 - Persona, instructions, and personality live per agent group in `groups/<folder>/CLAUDE.md` — edit that file for the target group.
 - Container runtime behavior (provider, model, packages, MCP servers) lives in the `container_configs` table: `ncl groups config get/update --id <group-id>`.
 
+### Switching the Model an Agent Group Uses
+
+If a group's `model` is unset (the default for auto-created groups), the container falls back to the Claude Agent SDK's own built-in default — nothing in NanoClaw pins it, and it is completely unrelated to whatever model is running this Claude Code CLI session (separate process, separate credential injection via OneCLI).
+
+To pin a specific model:
+1. Find the agent group id: `ncl groups list`, or trace messaging group → wiring → agent group with `ncl messaging-groups list` + `ncl wirings list`.
+2. `ncl groups config update --id <group-id> --model sonnet` — the value is passed through unvalidated all the way to the SDK (`container/agent-runner/src/providers/claude.ts`), which resolves short aliases (`sonnet`, `opus`, `haiku`) itself. Prefer the alias over a dated snapshot id so it doesn't go stale.
+3. `ncl groups restart --id <group-id>` to kill the running container(s).
+
+Note: without `--message`, restart only kills the container — `groups/<folder>/container.json` is re-materialized from the DB at the next actual spawn (`materializeContainerJson()` in `src/container-config.ts`, called from `container-runner.ts`), which happens on the next incoming message. The on-disk `container.json` will look unchanged until then; that's expected, not a failed update. Verify the DB side instead: `pnpm exec tsx scripts/q.ts data/v2.db "SELECT agent_group_id, provider, model FROM container_configs"`.
+
 ### Adding New Commands
 
 Questions to ask:
