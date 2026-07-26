@@ -11,6 +11,23 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — `nanoclaw-coding` meta-skill for hands-on repo work
+
+Added `.claude/skills/nanoclaw-coding/SKILL.md`, a project-level Claude Code skill (not a
+NanoClaw product skill) that consolidates conventions this fork has had to re-teach across
+sessions via auto-memory: ask before implementing or committing/pushing, never put secrets in a
+shell argument, TDD (mandatory for the Matrix channel), follow an existing plumbing pattern
+instead of inventing a new one (the `show_token_usage` toggle added earlier today is used as the
+worked example), systemd unit resolution + host/container restart semantics, the Matrix live
+E2E suite, and — the rule that had just been violated twice — always self-verify a change
+end-to-end (including any required service/container restart) before telling the user it's ready
+to test. Prompted by the user pointing out that relying on scattered auto-memory files wasn't
+working reliably; an always-loadable skill is the more durable form for conventions specific to
+editing this repo's own code. The source memory files are left in place as the detailed
+historical record.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-26 — Optional per-response token-usage summary notice
 
 Added a second opt-in, off-by-default diagnostic notice alongside the existing
