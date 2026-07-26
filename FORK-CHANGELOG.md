@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — Track group capability config instead of gitignoring it
+
+Upstream blanket-ignores `groups/*` as per-installation state. That is wrong for this fork: a
+custom Task-tool subagent or a persona edit is a real capability addition, authored once and
+nowhere else on disk, so ignoring it meant `websearch.md`, `smart.md`, and
+`instructions.prepend.md` existed in no commit and would vanish on a fresh clone. Carved those
+two paths out of the ignore rule (`groups/*/instructions.prepend.md`, `groups/*/.claude/agents/`)
+via a generic pattern, so any future group gets the same treatment automatically.
+
+Everything else under `groups/` stays ignored, for two distinct reasons: `conversations/` and
+`memory/` are private user content (chat transcripts, personal notes) that must not reach a
+public remote; `CLAUDE.md`, `container.json`, and `.claude-fragments/` are build artifacts
+regenerated at every container spawn — `CLAUDE.md` literally carries a "Composed at spawn - do
+not edit" header and holds nothing but `@`-imports, whose real sources (`container/CLAUDE.md`,
+`container/agent-runner/src/mcp-tools/*.instructions.md`, `container/skills/*/instructions.md`,
+and now `instructions.prepend.md`) are all tracked at their own locations. Committing them would
+add dangling `/app/...` symlinks and content that the next spawn overwrites anyway.
+
+Also worth recording from the same session: the `smart` subagent's `opus` alias resolves to
+`claude-opus-4-8`, not Opus 5. Alias→model-id mapping is frozen inside the pinned
+`@anthropic-ai/claude-agent-sdk@0.3.197` / `@anthropic-ai/claude-code@2.1.197` (`container/cli-tools.json`),
+not resolved server-side, so pointing `opus` at a newer model requires bumping those pins.
+
+vibecoded with Claude Opus 5
+
 ## 2026-07-26 — Fix a self-sustaining agent-to-agent notice loop, and a duplicate-error relay bug
 
 Incident, corrected root cause (an earlier version of this entry blamed prompt-cache
