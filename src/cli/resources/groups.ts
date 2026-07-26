@@ -33,6 +33,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     packages_npm: JSON.parse(row.packages_npm),
     additional_mounts: JSON.parse(row.additional_mounts),
     cli_scope: row.cli_scope,
+    log_subagents: row.log_subagents === 1,
     updated_at: row.updated_at,
   };
 }
@@ -256,7 +257,7 @@ registerResource({
       access: 'approval',
       description:
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
-        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope.',
+        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -266,7 +267,14 @@ registerResource({
         const updates: Partial<
           Pick<
             ContainerConfigRow,
-            'provider' | 'model' | 'effort' | 'image_tag' | 'assistant_name' | 'max_messages_per_prompt' | 'cli_scope'
+            | 'provider'
+            | 'model'
+            | 'effort'
+            | 'image_tag'
+            | 'assistant_name'
+            | 'max_messages_per_prompt'
+            | 'cli_scope'
+            | 'log_subagents'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -283,10 +291,17 @@ registerResource({
           }
           updates.cli_scope = scope;
         }
+        if (args['log-subagents'] !== undefined || args.log_subagents !== undefined) {
+          const raw = String(args['log-subagents'] ?? args.log_subagents);
+          if (!['true', 'false'].includes(raw)) {
+            throw new Error('--log-subagents must be one of: true, false');
+          }
+          updates.log_subagents = raw === 'true' ? 1 : 0;
+        }
 
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents',
           );
         }
 

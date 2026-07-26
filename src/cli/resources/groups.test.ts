@@ -259,3 +259,48 @@ describe('groups config add-mount / remove-mount (host-only)', () => {
     expect(JSON.parse(getContainerConfig(GID)!.additional_mounts)).toEqual([]);
   });
 });
+
+describe('groups config update --log-subagents', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  it('is off (NULL) for a freshly created config row', () => {
+    const GID = 'ag-log-subagents-default';
+    createAgentGroup({ id: GID, name: 'l', folder: 'l', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+    expect(getContainerConfig(GID)!.log_subagents).toBeNull();
+  });
+
+  it('flips to on and back to off via the CLI, and rejects a non-boolean value', async () => {
+    const GID = 'ag-log-subagents';
+    createAgentGroup({ id: GID, name: 'l', folder: 'l', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    const on = await dispatch(
+      { id: 'r1', command: 'groups-config-update', args: { id: GID, 'log-subagents': 'true' } },
+      { caller: 'host' },
+    );
+    expect(on.ok).toBe(true);
+    expect(getContainerConfig(GID)!.log_subagents).toBe(1);
+
+    const off = await dispatch(
+      { id: 'r2', command: 'groups-config-update', args: { id: GID, 'log-subagents': 'false' } },
+      { caller: 'host' },
+    );
+    expect(off.ok).toBe(true);
+    expect(getContainerConfig(GID)!.log_subagents).toBe(0);
+
+    const bad = await dispatch(
+      { id: 'r3', command: 'groups-config-update', args: { id: GID, 'log-subagents': 'yes' } },
+      { caller: 'host' },
+    );
+    expect(bad.ok).toBe(false);
+  });
+});

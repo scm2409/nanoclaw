@@ -150,8 +150,26 @@ export async function ensureEncryptorForRoom(
     if (crypto.roomEncryptors?.[roomId]) return;
 
     const room = client.getRoom?.(roomId);
-    const event = room?.currentState?.getStateEvents?.('m.room.encryption', '');
-    if (!room || !event) return;
+    if (!room) return;
+
+    let event = room.currentState?.getStateEvents?.('m.room.encryption', '');
+    if (!event) {
+      // The local room store's currentState can lag real server-side state —
+      // same lazy-hydration gap as resolveThreadId's membership check
+      // (state application and timeline-event processing are separate
+      // pipelines). This isn't the hot path — it only runs after the free
+      // local check already came up empty — so ask the homeserver directly
+      // rather than give up: authoritative, no local-cache staleness
+      // possible. A 404 here means the room genuinely isn't encrypted.
+      let content: Record<string, unknown> | null = null;
+      try {
+        content = await client.getStateEvent?.(roomId, 'm.room.encryption', '');
+      } catch {
+        content = null;
+      }
+      if (!content) return;
+      event = { getContent: () => content };
+    }
 
     await crypto.onCryptoEvent(room, event);
     log.info('Matrix: registered missing room encryptor before send', { roomId });
@@ -244,6 +262,20 @@ export function wrapWithEncryptedMedia(adapter: ReturnType<typeof createMatrixAd
   };
 
   return adapter;
+}
+
+/**
+ * True only for a send failure that is unambiguous, named server-side
+ * evidence the target room is actually dead (kicked, room deleted, never
+ * joined) — never for a local/client-side failure (a crypto-config gap, a
+ * network blip) that merely looks the same as a departure to a generic
+ * catch block. See wrapWithDmResolution's postMessage wrapper: this is the
+ * ONLY thing allowed to justify abandoning a room we have confirmed-inbound
+ * evidence for and silently inventing a new one via openDM().
+ */
+function isConfirmedRoomDeathError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\bM_FORBIDDEN\b|\bM_NOT_FOUND\b|not a member of this room/i.test(message);
 }
 
 /**
@@ -420,13 +452,42 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
       const resolvedKnownRoomId = followTombstone(knownRoomId);
       const room = client?.getRoom(resolvedKnownRoomId);
       const membership = room?.getMyMembership?.();
+      // matrix-js-sdk's Room.getMyMembership() is `this.selfMembership ??
+      // KnownMembership.Leave` — it collapses "no membership state event for
+      // us has been applied to this room yet" into the exact same 'leave'
+      // string as a genuine confirmed departure. selfMembership is only set
+      // when recalculate() finds an actual m.room.member state event for our
+      // own user id in currentState; a timeline (message) event can arrive
+      // and fire __onInboundSender before that state event has been applied
+      // — lazy member loading and state application are separate pipelines.
+      // So 'leave'/'ban' alone is not evidence; it must be backed by a real
+      // state event, checked directly here, or it's just "unknown."
+      const hasOwnMembershipStateEvent = Boolean(
+        room?.currentState?.getStateEvents?.('m.room.member', (adapter as any).userID),
+      );
       log.debug('Matrix resolveThreadId cache validity check', {
         knownRoomId,
         resolvedKnownRoomId,
         hasClient: Boolean(client),
         hasRoom: Boolean(room),
         membership,
+        hasOwnMembershipStateEvent,
       });
+      if ((membership === 'leave' || membership === 'ban') && !hasOwnMembershipStateEvent) {
+        // Server delivery guarantees a room event can only ever reach a
+        // still-joined member — so if we have no actual state event backing
+        // this reading, it cannot be a real departure. Observed live: this
+        // exact gap reused a genuinely current, encrypted room the SDK just
+        // hadn't finished hydrating instead of falling back to a stale,
+        // unencrypted zombie room that only "won" because its state had
+        // already fully loaded.
+        log.info('Matrix: leave/ban reading has no backing state event, treating as unknown not confirmed', {
+          userHandle,
+          roomId: resolvedKnownRoomId,
+          membership,
+        });
+        return adapter.encodeThreadId({ roomID: resolvedKnownRoomId });
+      }
       if (membership === 'leave' || membership === 'ban') {
         // Confirmed departure of the single-slot pointer. Before falling to
         // openDM(), check whether another room for this same user is still
@@ -620,12 +681,31 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
       }
       const userHandle = threadId.startsWith('matrix:') ? threadId.slice('matrix:'.length) : threadId;
 
-      // The local Room object can look perfectly joined for a room that's
-      // genuinely dead server-side (kicked, room deleted, etc.) — a real
-      // send failure is stronger evidence than any membership check, so
-      // this is the one case where re-deferring to openDM() is correct: we
-      // just learned our own cached/persisted history is wrong.
-      log.warn('Matrix: send into resolved room failed, invalidating cache and re-resolving via openDM', {
+      // Answering a message in a DIFFERENT room than it arrived in never
+      // makes sense — so abandoning a room we have confirmed-inbound
+      // evidence for must require equally strong evidence it's actually
+      // dead, not just "a send failed." A local encryption-setup gap ("Cannot
+      // encrypt event in unconfigured room" — the 2026-07-26 incident) or a
+      // transient network error throws exactly like a genuine M_FORBIDDEN
+      // departure would, but proves nothing about the room's validity.
+      // Retry the SAME room once instead of ever silently rerouting into a
+      // freshly-invented one; only a real, named Matrix API error confirming
+      // departure justifies openDM().
+      if (!isConfirmedRoomDeathError(err)) {
+        log.warn('Matrix: send failed with no confirmed room-death evidence, retrying same room once', {
+          userHandle,
+          roomId: staleRoomId,
+          err,
+        });
+        await ensureEncryptorForRoom(adapter, staleRoomId);
+        return await origPostMessage(resolvedTid, ...args);
+      }
+
+      // A real, named departure error (M_FORBIDDEN / M_NOT_FOUND / "not a
+      // member") is strong enough evidence to invalidate the cache and
+      // re-resolve via openDM() — the one case where that's correct, because
+      // we've just learned our own cached/persisted history is wrong.
+      log.warn('Matrix: send into resolved room failed with confirmed room-death evidence, re-resolving via openDM', {
         userHandle,
         staleRoomId,
         err,

@@ -38,6 +38,16 @@ type FakeRoom = {
   membership: string;
   otherMember: string;
   tombstoneReplacement?: string;
+  /**
+   * Whether the fake room has an actual m.room.member state event on record
+   * for the bot's own user. Defaults to true (a real, confirmed membership —
+   * matching how `membership` is normally used in these fixtures). Set to
+   * false to simulate matrix-js-sdk's actual lazy-hydration gap: a timeline
+   * event (message) has arrived and been processed, but the state event for
+   * our own membership in this room hasn't been applied yet, so
+   * getMyMembership() falls back to 'leave' with nothing real behind it.
+   */
+  hasOwnMembershipStateEvent?: boolean;
 };
 
 function makeFakeAdapter(botId: string, rooms: Record<string, FakeRoom>, openDMResult: string) {
@@ -54,9 +64,18 @@ function makeFakeAdapter(botId: string, rooms: Record<string, FakeRoom>, openDMR
         getJoinedMembers: () => [{ userId: botId }, { userId: room.otherMember }],
         getMyMembership: () => room.membership,
         currentState: {
-          getStateEvents: (eventType: string) => {
-            if (eventType !== 'm.room.tombstone' || !room.tombstoneReplacement) return null;
-            return { getContent: () => ({ replacement_room: room.tombstoneReplacement }) };
+          getStateEvents: (eventType: string, stateKey?: string) => {
+            if (eventType === 'm.room.tombstone') {
+              return room.tombstoneReplacement
+                ? { getContent: () => ({ replacement_room: room.tombstoneReplacement }) }
+                : null;
+            }
+            if (eventType === 'm.room.member' && stateKey === botId) {
+              return room.hasOwnMembershipStateEvent === false
+                ? null
+                : { getContent: () => ({ membership: room.membership }) };
+            }
+            return null;
           },
         },
       };
@@ -143,9 +162,64 @@ describe('wrapWithDmResolution — DM room resolution', () => {
       '!left:example.org',
       '@user2:example.org',
     );
+    // A real, state-backed 'leave' (the fixture's default) is still trusted
+    // immediately — see the "reboot" test below for the opposite case, where
+    // 'leave' has no backing state event and must NOT be trusted.
     await wrapped.postMessage('matrix:@user2:example.org', { markdown: 'hi' });
 
     expect(openDM).toHaveBeenCalledWith('@user2:example.org');
+  });
+
+  it('a leave/ban reading with no backing state event is distrusted, not the room (2026-07-26 reboot incident)', async () => {
+    // Observed live, ~30 min after a host restart: an inbound message from
+    // "!current" was correctly cached via __onInboundSender, but resolveThreadId's
+    // own membership check read "!current" as leave/ban — matrix-js-sdk's
+    // getMyMembership() is `this.selfMembership ?? KnownMembership.Leave`, and
+    // selfMembership is only set once recalculate() finds a real m.room.member
+    // state event for our own user id. The timeline event (message) had been
+    // processed — hence the confirmed inbound — but that state event hadn't
+    // been applied to this room yet: two separate pipelines. An OLDER,
+    // unrelated (fully-hydrated) room happened to read 'join' and "won" the
+    // single-slot-stale fallback, so every reply was silently routed into a
+    // room the user had never seen — and that wrong room got persisted to
+    // disk, poisoning every later resolution too.
+    //
+    // A 'leave'/'ban' reading with no actual state event behind it is not
+    // evidence of departure — server delivery guarantees a room event can
+    // only ever reach an account that's still joined.
+    const { adapter, openDM, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!old-unrelated:example.org': {
+          id: '!old-unrelated:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user13:example.org',
+        },
+        '!current:example.org': {
+          id: '!current:example.org',
+          joinedCount: 2,
+          membership: 'leave',
+          otherMember: '@user13:example.org',
+          hasOwnMembershipStateEvent: false,
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    const wrapped = wrapWithDmResolution(adapter);
+    const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
+
+    // An older, unrelated room for the same user is already on record...
+    hook('!old-unrelated:example.org', '@user13:example.org');
+    // ...then the user's live message arrives from their current room.
+    hook('!current:example.org', '@user13:example.org');
+
+    // The reply must go to the room we JUST heard from, not the older one —
+    // even though its own membership read says 'leave'.
+    await wrapped.postMessage('matrix:@user13:example.org', { markdown: 'hi' });
+
+    expect(openDM).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith('!current:example.org', { markdown: 'hi' });
   });
 
   it('warms the cache from the raw sender field even when room-membership enumeration would fail (lazyLoadMembers gap)', async () => {
@@ -373,8 +447,11 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     const hook = (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender;
 
     // Confirmed inbound from the still-good room first, then (later) from a
-    // room that has since been abandoned — so the abandoned one is the
-    // current single-slot pointer, but the good one is still on record.
+    // room that has since been abandoned (a real, state-backed leave — the
+    // fixture's default) — so the abandoned one is the current single-slot
+    // pointer, but the good one is still on record. See the 2026-07-26
+    // reboot test for the opposite case: the same shape, but the 'leave'
+    // has no backing state event and must NOT be trusted as a departure.
     hook('!still-joined:example.org', '@user8:example.org');
     hook('!abandoned:example.org', '@user8:example.org');
 
@@ -509,6 +586,80 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     await wrapped.postMessage('matrix:@user11:example.org', { markdown: 'again' });
     expect(openDM).toHaveBeenCalledTimes(1);
     expect(postMessage).toHaveBeenLastCalledWith('!fresh:example.org', { markdown: 'again' });
+  });
+
+  it('a local encryption-config failure retries the SAME room instead of abandoning it via openDM (2026-07-26 incident)', async () => {
+    // Answering into a different room than the question arrived in never
+    // makes sense — so a send failure must be UNAMBIGUOUS server-side
+    // evidence the room is dead before it's allowed to trigger openDM().
+    // "Cannot encrypt event in unconfigured room" is a local crypto-setup
+    // gap (see matrix-encryptors.test.ts) that throws exactly like a real
+    // departure to a generic catch block, but proves nothing about the
+    // room. It must retry the room we have confirmed-inbound evidence for,
+    // not invent a new one.
+    const { adapter, openDM } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!current:example.org': {
+          id: '!current:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user14:example.org',
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    let attempt = 0;
+    const rawPostMessage = vi.fn(async (threadId: string, ...args: unknown[]) => {
+      attempt++;
+      if (attempt === 1) throw new Error('Cannot encrypt event in unconfigured room !current:example.org');
+      return { id: 'sent', threadId, args };
+    });
+    (adapter as unknown as { postMessage: typeof rawPostMessage }).postMessage = rawPostMessage;
+
+    const wrapped = wrapWithDmResolution(adapter);
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!current:example.org',
+      '@user14:example.org',
+    );
+
+    await wrapped.postMessage('matrix:@user14:example.org', { markdown: 'hi' });
+
+    expect(openDM).not.toHaveBeenCalled();
+    expect(rawPostMessage).toHaveBeenCalledTimes(2);
+    expect(rawPostMessage).toHaveBeenNthCalledWith(1, '!current:example.org', { markdown: 'hi' });
+    expect(rawPostMessage).toHaveBeenNthCalledWith(2, '!current:example.org', { markdown: 'hi' });
+  });
+
+  it('propagates a persistent non-death failure without ever calling openDM', async () => {
+    const { adapter, openDM } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!current:example.org': {
+          id: '!current:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user15:example.org',
+        },
+      },
+      '!should-not-be-used:example.org',
+    );
+    const rawPostMessage = vi.fn(async () => {
+      throw new Error('Cannot encrypt event in unconfigured room !current:example.org');
+    });
+    (adapter as unknown as { postMessage: typeof rawPostMessage }).postMessage = rawPostMessage;
+
+    const wrapped = wrapWithDmResolution(adapter);
+    (wrapped as unknown as { __onInboundSender: (t: string, s: string) => void }).__onInboundSender(
+      '!current:example.org',
+      '@user15:example.org',
+    );
+
+    await expect(wrapped.postMessage('matrix:@user15:example.org', { markdown: 'hi' })).rejects.toThrow(
+      'Cannot encrypt event in unconfigured room',
+    );
+    expect(openDM).not.toHaveBeenCalled();
+    expect(rawPostMessage).toHaveBeenCalledTimes(2); // original attempt + one same-room retry, no more
   });
 
   it('persists the confirmed room across a restart — a fresh instance never calls openDM for an already-known user', async () => {

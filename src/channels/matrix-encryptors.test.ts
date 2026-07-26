@@ -102,10 +102,21 @@ describe('ensureRoomEncryptors', () => {
 
 describe('ensureEncryptorForRoom', () => {
   /** Adapter whose crypto backend already knows about `registeredRooms`. */
-  function makeSendAdapter(rooms: FakeRoom[], registeredRooms: string[] = []) {
+  function makeSendAdapter(rooms: (FakeRoom & { stateHydrated?: boolean })[], registeredRooms: string[] = []) {
     const onCryptoEvent = vi.fn().mockResolvedValue(undefined);
     const roomEncryptors: Record<string, object> = {};
     for (const id of registeredRooms) roomEncryptors[id] = {};
+
+    // Live homeserver fetch — the fallback when currentState hasn't
+    // hydrated the state event locally yet. Always authoritative: a room
+    // that isn't really encrypted 404s, same as the real API.
+    const getStateEvent = vi.fn(async (roomId: string, type: string, stateKey: string) => {
+      const r = rooms.find((x) => x.roomId === roomId);
+      if (type === 'm.room.encryption' && stateKey === '' && r?.encrypted) {
+        return { algorithm: 'm.megolm.v1.aes-sha2' };
+      }
+      throw new Error('M_NOT_FOUND: Event not found.');
+    });
 
     const client = {
       getRoom: (roomId: string) => {
@@ -115,13 +126,16 @@ describe('ensureEncryptorForRoom', () => {
           roomId: r.roomId,
           currentState: {
             getStateEvents: (type: string, stateKey: string) =>
-              type === 'm.room.encryption' && stateKey === '' && r.encrypted ? { getContent: () => ({}) } : null,
+              type === 'm.room.encryption' && stateKey === '' && r.encrypted && r.stateHydrated !== false
+                ? { getContent: () => ({}) }
+                : null,
           },
         };
       },
       getCrypto: () => ({ onCryptoEvent, roomEncryptors }),
+      getStateEvent,
     };
-    return { adapter: { client } as unknown as Adapter, onCryptoEvent };
+    return { adapter: { client } as unknown as Adapter, onCryptoEvent, getStateEvent };
   }
 
   it('registers the encryptor for a known encrypted room that has none', async () => {
@@ -150,5 +164,35 @@ describe('ensureEncryptorForRoom', () => {
 
   it('never throws when crypto is unavailable', async () => {
     await expect(ensureEncryptorForRoom({} as Adapter, '!a:server')).resolves.toBeUndefined();
+  });
+
+  it('falls back to a live server fetch when local state has not hydrated yet (2026-07-26 incident)', async () => {
+    // Observed live: a room the client had already decrypted an INBOUND
+    // message from (proving it's genuinely encrypted and joined) still had
+    // no m.room.encryption event in currentState — timeline processing and
+    // state application are separate pipelines. The free local check came
+    // up empty, so this used to give up silently, and the next send failed
+    // with "Cannot encrypt event in unconfigured room" — which then tripped
+    // postMessage's send-failure self-heal into abandoning the room
+    // entirely for a fresh, unencrypted one via openDM().
+    const { adapter, onCryptoEvent, getStateEvent } = makeSendAdapter([
+      { roomId: '!not-yet-hydrated:server', membership: 'join', encrypted: true, stateHydrated: false },
+    ]);
+
+    await ensureEncryptorForRoom(adapter, '!not-yet-hydrated:server');
+
+    expect(getStateEvent).toHaveBeenCalledWith('!not-yet-hydrated:server', 'm.room.encryption', '');
+    expect(onCryptoEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing for a genuinely unencrypted room even after checking the server', async () => {
+    const { adapter, onCryptoEvent, getStateEvent } = makeSendAdapter([
+      { roomId: '!plain-unhydrated:server', membership: 'join', encrypted: false, stateHydrated: false },
+    ]);
+
+    await ensureEncryptorForRoom(adapter, '!plain-unhydrated:server');
+
+    expect(getStateEvent).toHaveBeenCalledWith('!plain-unhydrated:server', 'm.room.encryption', '');
+    expect(onCryptoEvent).not.toHaveBeenCalled();
   });
 });

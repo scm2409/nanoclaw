@@ -43,6 +43,7 @@ export interface ContainerConfig {
   maxMessagesPerPrompt?: number;
   model?: string;
   effort?: string;
+  logSubagents?: boolean;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -63,6 +64,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     maxMessagesPerPrompt: row.max_messages_per_prompt ?? undefined,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
+    logSubagents: row.log_subagents === 1 ? true : undefined,
   };
 }
 

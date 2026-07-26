@@ -7,6 +7,7 @@ import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { TIMEZONE, formatLocalStamp } from '../timezone.js';
+import { loadFileSubagents } from './file-subagents.js';
 import { registerProvider } from './provider-registry.js';
 import type {
   AgentProvider,
@@ -529,6 +530,13 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // The claude CLI does NOT auto-discover .claude/agents/*.md files when
+    // run headlessly (verified against the real binary — see
+    // file-subagents.ts) — only the programmatic `agents` option registers
+    // one. Without this, every subagent file a group ships (e.g. a
+    // websearch.md) is silently unusable via the Task tool.
+    const fileSubagents = loadFileSubagents(input.cwd);
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
@@ -541,6 +549,7 @@ export class ClaudeProvider implements AgentProvider {
           : undefined,
         allowedTools: [...TOOL_ALLOWLIST, ...Object.keys(this.mcpServers).map(mcpAllowPattern)],
         disallowedTools: SDK_DISALLOWED_TOOLS,
+        agents: Object.keys(fileSubagents).length > 0 ? fileSubagents : undefined,
         env: this.env,
         model: this.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -559,6 +568,13 @@ export class ClaudeProvider implements AgentProvider {
     });
 
     let aborted = false;
+    const mainModel = this.model;
+    // Lazily populated on the first subagent invocation and reused for the
+    // rest of this query — resolves subagent name -> model via the SDK's
+    // Query.supportedAgents(), which mirrors the .claude/agents/*.md
+    // frontmatter (an agent with no explicit `model` inherits the main
+    // model, so it's absent from the returned AgentInfo).
+    let agentModels: Map<string, string> | null = null;
 
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
@@ -621,6 +637,29 @@ export class ClaudeProvider implements AgentProvider {
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
           const tn = message as { summary?: string };
           yield { type: 'progress', message: tn.summary || 'Task notification' };
+        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_started') {
+          // subagent_type is only set for Task-tool subagent invocations
+          // (absent for shell/workflow/monitor tasks) — the reliable signal
+          // that a subagent, not some other background task, just started.
+          const ts = message as { subagent_type?: string; description?: string };
+          if (ts.subagent_type) {
+            if (!agentModels) {
+              agentModels = new Map();
+              try {
+                const agents = await sdkResult.supportedAgents();
+                for (const a of agents) agentModels.set(a.name, a.model || mainModel || 'inherit');
+              } catch (err) {
+                log(`supportedAgents() failed, falling back to 'inherit': ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+            const models = agentModels;
+            yield {
+              type: 'subagent',
+              subagentType: ts.subagent_type,
+              model: models.get(ts.subagent_type) ?? mainModel ?? 'inherit',
+              description: ts.description,
+            };
+          }
         }
       }
       log(`Query completed after ${messageCount} SDK messages`);

@@ -438,6 +438,53 @@ describe('error result with no <message> envelope', () => {
   });
 });
 
+/** Build a query that yields init, a subagent event, then an empty result. */
+function makeSubagentQuery(): { query: AgentQuery; pushes: string[] } {
+  const pushes: string[] = [];
+  async function* events(): AsyncGenerator<ProviderEvent> {
+    yield { type: 'init', continuation: 'sess-1' };
+    yield { type: 'subagent', subagentType: 'websearch', model: 'haiku' };
+    yield { type: 'result', text: null };
+  }
+  return {
+    pushes,
+    query: {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    },
+  };
+}
+
+describe('subagent logging notice', () => {
+  it('delivers a chat notice naming the subagent and its model when logSubagents is on', async () => {
+    const { query, pushes } = makeSubagentQuery();
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, true);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const text = JSON.parse(out[0].content).text as string;
+    expect(text).toContain('websearch');
+    expect(text).toContain('haiku');
+    expect(out[0].platform_id).toBe('chan-1');
+    // The notice is a side-channel write, never a push into the agent's own
+    // SDK stream — it must not appear as a nudge/follow-up.
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('stays silent when logSubagents is off (the default)', async () => {
+    const { query } = makeSubagentQuery();
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+});
+
 describe('isCorruptionError', () => {
   it('matches the Docker Desktop macOS torn-read symptom', () => {
     expect(isCorruptionError('database disk image is malformed')).toBe(true);

@@ -11,6 +11,103 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-26 — `.claude/agents/*.md` subagent files were silently unusable
+
+While verifying the subagent-logging feature below, the log stayed silent for every web-research
+turn — the main agent kept using `curl` via Bash or the built-in `general-purpose` subagent
+instead of the group's own `websearch` subagent, despite an explicit standing instruction to
+always delegate. Traced it all the way down: the Claude Agent SDK / `claude` CLI does **not**
+auto-discover `.claude/agents/*.md` files when run headlessly. Verified empirically against the
+real `claude` binary (`2.1.197`) inside a running container — `claude -p ... --setting-sources
+project,user,local` never lists a subagent defined only as a markdown file on disk as an available
+`Task`-tool `subagent_type`, regardless of content, cwd, or frontmatter cleanliness. Passing the
+exact same definition via the CLI's `--agents '{"name": {...}}'` flag (the SDK's programmatic
+`Options.agents` field) registers it immediately. Auto-discovery of `.claude/agents/` appears to
+be an interactive-TUI-only behavior — every subagent file this fork has ever shipped (starting
+with `websearch.md`) was invisible to the Task tool from the day it was added.
+
+Added `container/agent-runner/src/providers/file-subagents.ts`: reads `.claude/agents/*.md` from
+the query's `cwd`, parses the YAML-ish frontmatter (`description`, `model`, `tools: [...]`) plus
+body-as-prompt, and `claude.ts`'s `query()` now passes the result through `Options.agents` on
+every call. Best-effort per file — one malformed agent file can't take down the others. No new
+dependency: the frontmatter shape these files use (flat scalars + one bracketed array) doesn't
+need a real YAML parser.
+
+Verified end-to-end myself via the local CLI channel (`pnpm run chat`, wired to the same
+production agent group) rather than asking for another live Matrix round-trip after several
+failed fix attempts — restarted the group's container to pick up the fix, then watched a weather
+question correctly trigger `🔎 Subagent: websearch (Modell: haiku)` and a properly sourced answer,
+with no `curl` in sight. 9 new unit tests (`file-subagents.test.ts`), full host + container suites
+green.
+
+vibecoded with Claude Sonnet 5
+
+---
+
+## 2026-07-26 — Matrix self-heal was inventing a new room on ANY send failure, not just a dead one
+
+Direct continuation of the DM-room-resolution fix below (itself a continuation of the 2026-07-25
+incident) — same symptom kept recurring after each attempted fix: a reply landing in a fresh,
+unencrypted room instead of the room the question arrived in. Two real, separate bugs, found by
+reading `matrix-js-sdk@41.9.0`'s own source rather than guessing further:
+
+1. `Room.getMyMembership()` is `this.selfMembership ?? KnownMembership.Leave` — it collapses "no
+   membership state event applied to this room yet" into the exact same `'leave'` string as a
+   genuine confirmed departure. `resolveThreadId`'s staleness check trusted that string outright.
+   Fixed by checking `room.currentState.getStateEvents('m.room.member', botUserId)` directly for
+   an actual state event before ever treating `'leave'`/`'ban'` as evidence — deterministic, no
+   guessing, replaces an earlier same-day attempt that used a 60-second freshness window instead
+   (correctly called out as arbitrary and replaced same session).
+2. The real trigger of the incident this specific evening: `ensureEncryptorForRoom` has the exact
+   same local-state-lag blind spot for `m.room.encryption`, so a send failed with "Cannot encrypt
+   event in unconfigured room" for a room the bot had just decrypted a live inbound message from.
+   `postMessage`'s catch-all then treated *that* local, self-inflicted failure as equally strong
+   evidence as a real `M_FORBIDDEN` departure and called `openDM()` — which silently invents a
+   brand-new unencrypted room on any cache-miss. Fixed both ends: `ensureEncryptorForRoom` now
+   falls back to a live `client.getStateEvent()` homeserver fetch when the local cache is empty
+   (same authoritative-source principle as fix 1), and the `openDM()` self-heal path now requires
+   a *named* Matrix API error (`M_FORBIDDEN` / `M_NOT_FOUND` / "not a member") — anything else
+   retries the same room once instead of ever abandoning it. Answering a question in a different
+   room than it arrived in should never have been possible; now only unambiguous server-side proof
+   of departure can cause it.
+
+7 new/updated tests across `matrix-dm-resolution.test.ts` and `matrix-encryptors.test.ts`. Full
+host suite green; the two poisoned `data/matrix-dm-rooms.json` entries this produced during
+testing were corrected back to the operator's real room by hand.
+
+vibecoded with Claude Sonnet 5
+
+---
+
+## 2026-07-26 — Optional live chat notice when a subagent runs
+
+A prior session added a `websearch` subagent (`groups/main-agent/.claude/agents/websearch.md`,
+model `haiku`) for the main agent to delegate web research to via the SDK's `Task` tool, but
+there was no way to verify from the chat whether it was actually being used. Added an optional,
+per-agent-group toggle (`log_subagents` on `container_configs`, set via `ncl groups config
+update --log-subagents true`, default off) that makes the agent-runner deliver a short chat
+notice (e.g. "🔎 Subagent: websearch (Modell: haiku)") the moment the SDK's `Task` tool starts a
+subagent.
+
+Detection: the Claude Agent SDK emits a `system`/`task_started` message with `subagent_type` set
+for genuine Task-tool subagent invocations (shell/workflow/monitor tasks don't set it); the model
+is resolved via the SDK's `Query.supportedAgents()`, called once per query and cached. The notice
+is written straight to `messages_out` (the same side-channel `deliverErrorResult()` already used
+for undelivered error turns) rather than pushed into the agent's own SDK stream, so it can never
+enter the agent's context or influence its reasoning — purely a host-side observation on top of
+the existing message flow.
+
+Follows the model/effort/cli_scope pattern end to end: migration `020-log-subagents.ts`, new
+`ContainerConfig`/`RunnerConfig` field, `--log-subagents` CLI flag, and a new `ProviderEvent`
+('subagent') translated in `claude.ts`'s `translateEvents()`. Verified with `bun install` +
+`bun test` in `container/agent-runner` (a local `bun` binary isn't preinstalled in this dev
+environment, so it was fetched ad hoc for this session) alongside the full host `pnpm test` /
+`pnpm run build`.
+
+vibecoded with Claude Sonnet 5
+
+---
+
 ## 2026-07-25 — Drop commit shas from the changelog convention entirely
 
 While closing out the Matrix DM-resolution fix below, hit a real bug in the

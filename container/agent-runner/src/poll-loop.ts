@@ -80,6 +80,15 @@ export interface PollLoopConfig {
    * polling forever and stealing messages from the next test's DB.
    */
   signal?: AbortSignal;
+  /**
+   * When true, delivers a short chat notice ("🔎 Subagent: ...") to the
+   * user's channel the moment the SDK's Task tool starts a subagent — a
+   * side-channel write straight to messages_out, never pushed into the
+   * agent's own SDK stream, so it cannot influence the agent's context.
+   * Off by default; toggled via container.json (`ncl groups config update
+   * --log-subagents true`).
+   */
+  logSubagents?: boolean;
 }
 
 /**
@@ -258,6 +267,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         config.provider.onExchangeComplete?.bind(config.provider),
         prompt,
         continuation,
+        config.logSubagents,
       );
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
@@ -347,6 +357,7 @@ export async function processQuery(
   onExchangeComplete: ((exchange: ProviderExchange) => void) | undefined,
   initialPrompt: string,
   initialContinuation: string | undefined,
+  logSubagents = false,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -484,7 +495,9 @@ export async function processQuery(
       handleEvent(event, routing);
       touchHeartbeat();
 
-      if (event.type === 'init') {
+      if (event.type === 'subagent') {
+        if (logSubagents) deliverSubagentNotice(event, routing);
+      } else if (event.type === 'init') {
         queryContinuation = event.continuation;
         // Persist immediately so a mid-turn container crash still lets the
         // next wake resume the conversation. Without this, the session id
@@ -602,7 +615,32 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
     case 'progress':
       log(`Progress: ${event.message}`);
       break;
+    case 'subagent':
+      log(`Subagent started: ${event.subagentType} (model: ${event.model})`);
+      break;
   }
+}
+
+/**
+ * Deliver a live notice that a subagent (SDK Task tool) just started, when
+ * `logSubagents` is enabled. Written straight to messages_out — never
+ * `query.push()` — so the agent's own SDK stream never sees it and it
+ * cannot influence the agent's context or reasoning.
+ */
+function deliverSubagentNotice(
+  event: { subagentType: string; model: string; description?: string },
+  routing: RoutingContext,
+): void {
+  const detail = event.description ? ` — ${event.description}` : '';
+  writeMessageOut({
+    id: generateId(),
+    in_reply_to: routing.inReplyTo,
+    kind: 'chat',
+    platform_id: routing.platformId,
+    channel_type: routing.channelType,
+    thread_id: routing.threadId,
+    content: JSON.stringify({ text: `🔎 Subagent: ${event.subagentType} (Modell: ${event.model})${detail}` }),
+  });
 }
 
 /**

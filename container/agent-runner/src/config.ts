@@ -18,6 +18,7 @@ export interface RunnerConfig {
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   model?: string;
   effort?: string;
+  logSubagents?: boolean;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -47,6 +48,7 @@ export function loadConfig(): RunnerConfig {
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
+    logSubagents: raw.logSubagents === true,
   };
 
   return _config;

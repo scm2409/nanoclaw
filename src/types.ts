@@ -25,6 +25,7 @@ export interface ContainerConfigRow {
   packages_npm: string; // JSON: string[]
   additional_mounts: string; // JSON: AdditionalMountConfig[]
   cli_scope: string; // 'disabled' | 'group' | 'global'
+  log_subagents: number | null; // 0/1/NULL — NULL and 0 both mean off
   updated_at: string;
 }
 
