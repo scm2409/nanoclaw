@@ -11,6 +11,22 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-27 — Add deep-research container skill
+
+New container skill `container/skills/deep-research/` orchestrates the existing `websearch` and
+`smart` Task-tool subagents (see the 2026-07-26 entry below) into a multi-step research workflow:
+decompose an explicitly-requested deep/thorough research question into bounded sub-questions,
+dispatch them to `websearch` in parallel, cross-check for contradictions and gaps, and synthesize
+a cited report — escalating to `smart` for synthesis without asking the user first, since the
+explicit deep-research request is itself the standing approval for that (a scoped exception to
+the group's normal "ask before using `smart`" rule, which still applies everywhere else). Triggers
+only on explicit user requests ("recherchiere ausführlich", "compare X and Y in depth"); simple
+lookups keep going straight to `websearch` as before. Shared/auto-mounted like the other container
+skills, so any group with `websearch`/`smart` subagents defined can use it — no separate installer
+skill, no host-side reach-in, no REMOVE.md (consistent with the other container skills, which have
+none either: removing it is a plain file deletion).
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-26 — Track group capability config instead of gitignoring it
 
 Upstream blanket-ignores `groups/*` as per-installation state. That is wrong for this fork: a
