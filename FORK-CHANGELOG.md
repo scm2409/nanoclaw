@@ -34,6 +34,17 @@ Also worth recording from the same session: the `smart` subagent's `opus` alias 
 `@anthropic-ai/claude-agent-sdk@0.3.197` / `@anthropic-ai/claude-code@2.1.197` (`container/cli-tools.json`),
 not resolved server-side, so pointing `opus` at a newer model requires bumping those pins.
 
+**Do not bump those pins fork-locally to chase this** — that conclusion was considered and
+rejected. The pins are upstream-owned (`91ebc9d`, by an upstream maintainer; upstream bumps them
+periodically as `chore: bump claude-code to X and agent SDK to Y`), and as of 2026-07-27 upstream
+pins exactly the same 2.1.197/0.3.197 we do. Bumping locally would mean diverging on a file
+upstream actively maintains, re-deciding that divergence at every future update — for an effect
+that arrives for free once upstream bumps and we take it via `/update-nanoclaw`. Hardcoding a
+full model ID (`model: claude-opus-5`) in the subagent file works too — verified against the
+pinned CLI, which passes full model IDs straight through, only the *alias table* is stale — but
+it was rejected for the same maintenance reason: it needs manual updating for every future Opus,
+whereas the alias self-maintains once the SDK moves. Decision: wait for the upstream bump.
+
 vibecoded with Claude Opus 5
 
 ## 2026-07-26 — Fix a self-sustaining agent-to-agent notice loop, and a duplicate-error relay bug
