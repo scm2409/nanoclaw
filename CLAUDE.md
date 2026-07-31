@@ -20,6 +20,15 @@ This is a vibecoded fork. Any fork-local change made in a session must be descri
 `CHANGELOG.md`. Write the entry as part of the work, before asking to commit. See
 [docs/fork-changelog.md](docs/fork-changelog.md).
 
+## Config Changelog (operational, no code)
+
+Operational config made via `ncl` (agent groups, wirings, roles, scheduled tasks,
+container config, etc.) lives only in `data/v2.db` — untracked by git. Log anything
+worth remembering later in [CONFIG-CHANGELOG.md](CONFIG-CHANGELOG.md), which is
+itself gitignored (local per-install, may contain personal/operational specifics —
+this is a public repo). Convention, not a hook-enforced invariant. See
+[docs/config-changelog.md](docs/config-changelog.md).
+
 ---
 
 # NanoClaw

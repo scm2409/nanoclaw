@@ -58,3 +58,7 @@ AGENTS.md
 docs/maintainer-guide.md
 docs/drafts/
 forks.md
+
+# Config changelog — local record of DB-only ncl changes, may contain
+# personal/operational details not meant for the public repo
+/CONFIG-CHANGELOG.md

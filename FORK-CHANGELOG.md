@@ -11,6 +11,18 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-31 — Config changelog convention (local, gitignored file)
+
+`CLAUDE.md` and `docs/config-changelog.md` document a local convention for
+logging DB-only `ncl` changes (agent groups, wirings, roles, scheduled tasks,
+container config) that never show up in `git log`. The log file itself,
+`CONFIG-CHANGELOG.md`, is gitignored — it can carry operational specifics
+(what a group's tasks do, what boards/channels are wired) that shouldn't sit
+in a public repo. Only the convention (this doc + the pointer) is tracked;
+its content stays local per install.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-31 — Nextcloud (calendar + Deck) as an MCP tool
 
 New skill `.claude/skills/add-nextcloud-tool/` wires the upstream Python server
