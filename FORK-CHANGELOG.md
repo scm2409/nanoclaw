@@ -11,6 +11,48 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-07-31 — Nextcloud (calendar + Deck) as an MCP tool
+
+New skill `.claude/skills/add-nextcloud-tool/` wires the upstream Python server
+`nextcloud-mcp-server` into an agent group so the agent can read and write CalDAV
+calendar entries and Deck cards. It is the sibling of `/add-gcal-tool`, but with HTTP
+Basic instead of an OAuth bearer: the app password lives only in the OneCLI vault as
+`base64(user:app-password)` behind an `Authorization: Basic {value}` header template, and
+the group's MCP config carries the literal placeholder `onecli-managed` as its password —
+so no usable credential is stored in `data/v2.db`, in `container.json`, or inside the
+container.
+
+This is the first Python CLI in the agent image. `container/cli-tools.json` only covers
+pnpm globals, so `container/Dockerfile` gained a small `uv` block instead: the pinned uv
+image is pulled in as a stage (`COPY --from=` refuses to expand a build arg inside an
+image reference) and `uv tool install` places a self-contained interpreter plus the server
+under `/opt/uv`, redirected out of uv's default `~/.local/share/uv` because the container
+runs as the non-root `node` user. PyPI sits outside pnpm's `minimumReleaseAge` gate, so
+both versions were picked by hand from releases at least a week old rather than from the
+newest tag. `src/nextcloud-dockerfile.test.ts` guards that block structurally — the server
+is a stdio process, never an imported module, so nothing else in the tree would notice its
+removal.
+
+The server registers 110+ tools across a dozen Nextcloud apps; the wiring enables only
+`calendar` and `deck` via `--enable-app`, because every registered tool costs system-prompt
+tokens on every single turn.
+
+Two things had to be worked around before it ran end to end, both worth knowing for the
+next Python MCP server. First, TLS trust: the gateway MITMs the connection, so its CA has
+to be trusted, and the server's own `NEXTCLOUD_CA_BUNDLE` knob is the wrong lever — it
+turns the bundle into an `ssl.SSLContext`, which the caldav/niquests stack rejects, so
+every calendar call fails with `CERTIFICATE_VERIFY_FAILED`. Passing the same bundle as a
+path via `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` works. Second, and less obvious: the
+server hands httpx a transport it constructed itself, and httpx only resolves `HTTPS_PROXY`
+when it builds the transport — an explicit one routes directly. Those calls skipped the
+gateway entirely and reached Nextcloud holding the placeholder password, which showed up as
+Deck returning 401 while calendars worked and while `curl` in the same container got 200.
+`container/httpx-env-proxy-shim.py`, installed into the venv as `sitecustomize.py`, restores
+the env-proxy default for explicitly-built transports; it is generic and would fix any
+Python MCP server with the same shape.
+
+vibecoded with Claude Opus 5
+
 ## 2026-07-27 — Add deep-research container skill
 
 New container skill `container/skills/deep-research/` orchestrates the existing `websearch` and

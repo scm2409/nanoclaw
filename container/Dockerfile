@@ -10,6 +10,12 @@
 # bind mount at runtime (see src/container-runner.ts). Source-only changes
 # never require an image rebuild.
 
+# Pinned uv release, used to install the Python MCP CLIs further down. It has to
+# come in as its own stage: `COPY --from=` does not expand build args inside an
+# image reference, only a stage name.
+ARG UV_VERSION=0.11.32
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uvbin
+
 FROM node:22-slim
 
 # ---- Build-time arguments ----------------------------------------------------
@@ -105,6 +111,35 @@ RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 COPY cli-tools.json install-cli-tools.sh /tmp/
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     sh /tmp/install-cli-tools.sh /tmp/cli-tools.json
+
+# ---- Python CLIs (uv) --------------------------------------------------------
+# Some MCP servers the agent spawns are Python, not Node — cli-tools.json only
+# covers pnpm globals. uv ships its own Python, so no apt python3 and no second
+# system package manager in PATH.
+#
+# Both pins are deliberate: PyPI is outside pnpm's minimumReleaseAge gate, so
+# versions are chosen by hand from a release at least a week old.
+#
+# UV_TOOL_DIR / UV_PYTHON_INSTALL_DIR must be redirected: uv defaults to
+# ~/.local/share/uv, which is /root/... at build time and unreadable by the
+# non-root `node` user the container actually runs as.
+ARG NEXTCLOUD_MCP_VERSION=0.145.0
+COPY --from=uvbin /uv /usr/local/bin/uv
+ENV UV_TOOL_DIR=/opt/uv/tools \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_TOOL_BIN_DIR=/usr/local/bin
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv tool install --python 3.12 "nextcloud-mcp-server==${NEXTCLOUD_MCP_VERSION}" && \
+    chmod -R a+rX /opt/uv
+
+# nextcloud-mcp-server hands httpx a transport it built itself, and an explicit
+# transport ignores HTTPS_PROXY — those requests skip the OneCLI gateway and
+# arrive upstream with the credential placeholder (401). Installed as
+# sitecustomize.py so it loads before any server code.
+COPY httpx-env-proxy-shim.py /tmp/httpx-env-proxy-shim.py
+RUN cp /tmp/httpx-env-proxy-shim.py \
+       "$(ls -d /opt/uv/tools/nextcloud-mcp-server/lib/python3.*/site-packages)/sitecustomize.py" && \
+    rm /tmp/httpx-env-proxy-shim.py
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
