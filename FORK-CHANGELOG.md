@@ -11,6 +11,25 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-01 — nextcloud-deck-workflow container skill
+
+Added `container/skills/nextcloud-deck-workflow/SKILL.md` — generic conventions for
+any agent working Nextcloud Deck cards via the `add-nextcloud-tool` MCP integration:
+a recommended To do → Doing → Review → Done stack layout where "Review" is a pure
+automation gate (never touch a card sitting there, on any trigger, until the user
+releases it — prevents a scheduled/manual re-run from re-working a card before the
+user has seen the result), a default to comment your result on any card you touch,
+and chat-notification defaults (notify on Done, notify on gating to Review, ask
+directly if stuck, respect a per-task do-not-disturb). Lands in every agent
+container that runs `skills: 'all'` (the common case) but only matters to groups
+that actually have the Nextcloud Deck tool wired — same situation as any other
+generic container skill. Kept deliberately free of board names or group-specific
+facts so it's fine as a tracked, public file; a specific recurring task's own
+`--prompt` (DB-only, see `CONFIG-CHANGELOG.md`) references it by name instead of
+repeating its rules.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-07-31 — Config changelog convention (local, gitignored file)
 
 `CLAUDE.md` and `docs/config-changelog.md` document a local convention for
