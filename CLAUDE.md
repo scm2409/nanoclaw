@@ -18,7 +18,12 @@ If you are a fresh install (you ran `git clone`, not `git pull`) and there are n
 This is a vibecoded fork. Any fork-local change made in a session must be described in
 [FORK-CHANGELOG.md](FORK-CHANGELOG.md) before the session ends — never in upstream's
 `CHANGELOG.md`. Write the entry as part of the work, before asking to commit. See
-[docs/fork-changelog.md](docs/fork-changelog.md).
+[docs/fork-changelog.md](docs/fork-changelog.md). If the change also alters something
+described in `groups/main-agent/nanoclaw-overview.md` (KaiL01's own self-description —
+channels, subagents, Nextcloud scope, open items), update that file too, in the same
+session. Note: this file is gitignored (local per-install, like
+`CONFIG-CHANGELOG.md` below) since it names real host/domain specifics — the
+convention still applies, it just never shows up in a diff or PR.
 
 ## Config Changelog (operational, no code)
 
@@ -27,7 +32,9 @@ container config, etc.) lives only in `data/v2.db` — untracked by git. Log any
 worth remembering later in [CONFIG-CHANGELOG.md](CONFIG-CHANGELOG.md), which is
 itself gitignored (local per-install, may contain personal/operational specifics —
 this is a public repo). Convention, not a hook-enforced invariant. See
-[docs/config-changelog.md](docs/config-changelog.md).
+[docs/config-changelog.md](docs/config-changelog.md). Same rule as above: if the
+change alters something described in `groups/main-agent/nanoclaw-overview.md`, update
+that file too, in the same session.
 
 ---
 

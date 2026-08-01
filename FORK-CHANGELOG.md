@@ -11,6 +11,103 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-01 — KaiL01 self-description doc shared between Claude Code and the agent
+
+Added `groups/main-agent/nanoclaw-overview.md`: a plain doc describing what
+KaiL01 is and does (Matrix + voice transcription, the
+`websearch`/`smart` subagents, the Nextcloud MCP tool's calendar/Deck/webdav
+scope, and the still-open items — Deck auto-reminders, DokuWiki access,
+email drafting). Prompted by the user having written an equivalent brief by
+hand on a Nextcloud Deck card and wanting one description both sides of the
+collaboration — Claude Code sessions on this repo, and the agent itself —
+can read, instead of two copies drifting apart. Verified against the actual
+repo/DB state first (container.json, CONFIG-CHANGELOG.md, the group's own
+`.claude/agents/` files) rather than restating the card's claims verbatim.
+
+The file lives at the group's workspace root (not under `memory/`, not
+OKF-formatted) so it's plain content KaiL01 reads when relevant, not an
+active memory entity with its own indexing discipline. It names real
+host/domain specifics (the homelab hostname, the Nextcloud domain), so
+unlike `instructions.prepend.md`/`.claude/agents/` it stays out of git —
+same reasoning and same mechanism as `CONFIG-CHANGELOG.md`: this is a public
+repo, and `groups/*/*` is gitignored by default already, so no `.gitignore`
+change was needed, just leaving it alone rather than adding a `!` allowlist
+entry for it.
+
+The actually regenerated-at-spawn fragment tree (`.claude-fragments/`) was
+*not* the right place to point the agent at this file — an initial edit
+there was silently wiped by `composeGroupClaudeMd()` on the next container
+spawn, since that directory is fully derived from `instructions.prepend.md`
+and DB state, not a place for hand edits. Fixed by adding the pointer to
+`groups/main-agent/instructions.prepend.md` instead (the real source
+`.claude-fragments/persona.md` is compiled from), then verifying with
+`ncl groups restart` + `pnpm run chat` that the regenerated fragment picked
+it up.
+
+By design, KaiL01 only reads the file and never edits it — every capability
+change to date came from a Claude Code session, not the agent itself (per
+`CONFIG-CHANGELOG.md`), and giving both sides write access to the same file
+risked drift/races for no benefit. Root `CLAUDE.md`'s Fork Changelog and
+Config Changelog sections each got one added sentence: if a change touches
+what this file describes, update it in the same session — convention only,
+matching how `CONFIG-CHANGELOG.md` itself is kept (no new `Stop` hook, since
+"is this change relevant to the doc" isn't mechanically diffable the way
+"was a fork-local file written" is).
+
+vibecoded with Claude Sonnet 5
+
+## 2026-08-01 — email channel with a per-address allowlist in both directions
+
+Added a native email channel (`src/channels/email.ts`, IMAP in via `imapflow`, SMTP
+out via `nodemailer`, MIME decoding via `mailparser`) so an agent group can
+correspond by mail with a fixed, explicitly wired set of people — and with nobody
+else. The requirement was "this mailbox may only talk to these addresses" with
+enforcement local to NanoClaw, because the mail provider can't express it.
+
+Modelled as a **channel rather than an MCP tool** because the allowlist machinery
+already exists on the channel path and only there: inbound is
+`unknown_sender_policy='strict'` plus the `agent_group_members` row that
+`canAccessAgentGroup` checks, outbound is the `agent_destinations` row that
+`src/delivery.ts` re-validates against the central DB and throws on. A mail MCP
+server would have needed a second, parallel access-control system — and would have
+had to hold the mailbox password inside the container. Here the credentials stay in
+the host process (IMAP/SMTP aren't HTTP, so the OneCLI gateway can't inject them
+anyway) and the agent never has mailbox access at all. The existing email-adjacent
+skills didn't fit: `add-resend` is webhook-only and needs a verified domain,
+`add-deltachat` requires the correspondent to run DeltaChat and complete a QR
+SecureJoin, `add-gmail-tool` is explicitly tool-only with no inbound channel.
+
+`src/channels/email-allowlist.ts` reads that wiring as the allowlist — no new table,
+no migration, no second source of truth — and both directions fail closed, including
+when the agent-to-agent module is absent (deliberately unlike `delivery.ts`, which
+fails open there: for mail, "no destinations table" must not mean "may write to
+anyone"). `scripts/email-allow.ts add|remove|list` creates or removes all four rows
+in one idempotent step and projects destinations into live sessions, so allowing a
+new recipient takes effect without waiting for a container wake.
+
+Attachments work in both directions with hard limits (`src/channels/email-limits.ts`,
+10 MiB per file / 20 MiB total / 10 files outbound, env-overridable, junk values
+falling back to the default rather than disabling the limit). The asymmetry is
+deliberate: an outbound breach throws before anything reaches SMTP so the whole
+message fails, because a mail whose attachment was silently dropped is invisible to
+the recipient; an inbound breach skips the part and leaves an
+`[attachment omitted: …]` note in the text so the sender's words still arrive.
+
+Other behaviour worth naming: a first scan records the mailbox's current end position
+and processes nothing, so a fresh install doesn't answer years of archived mail; the
+UID watermark rather than `\Seen` drives selection, so a human reading the mailbox in
+a normal client can't make the agent skip messages; autoresponder mail is dropped
+*before* the allowlist check, because the mail-loop risk comes precisely from an
+allowed correspondent's own out-of-office reply; and every send goes to exactly one
+recipient with no CC or BCC, so the agent cannot smuggle extra recipients into a mail.
+
+Also added `.claude/skills/add-email/SKILL.md` (setup, allowlist management,
+verification) and `container/skills/email-formatting/SKILL.md`, which tells the agent
+the attachment numbers so it checks file sizes before attaching instead of
+discovering the limit by failing a send.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-01 — nextcloud-deck-workflow container skill
 
 Added `container/skills/nextcloud-deck-workflow/SKILL.md` — generic conventions for
