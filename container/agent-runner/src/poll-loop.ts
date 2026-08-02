@@ -287,6 +287,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Publish the batch's in_reply_to so MCP tools (send_message, send_file)
     // can stamp it on outbound rows — needed for a2a return-path routing.
     setCurrentInReplyTo(routing.inReplyTo);
+
     try {
       const result = await processQuery(
         query,
@@ -694,7 +695,11 @@ function deliverSubagentNotice(
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,
-    kind: 'chat',
+    // 'notice', not 'chat': the host suppresses these on channels that don't
+    // carry diagnostics (email — one extra mail per turn, disclosing the
+    // install's model choice to the correspondent). See ChannelAdapter
+    // .deliversNotices.
+    kind: 'notice',
     platform_id: routing.platformId,
     channel_type: routing.channelType,
     thread_id: routing.threadId,
@@ -723,7 +728,7 @@ function deliverTokenUsageNotice(
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,
-    kind: 'chat',
+    kind: 'notice', // see deliverSubagentNotice
     platform_id: routing.platformId,
     channel_type: routing.channelType,
     thread_id: routing.threadId,

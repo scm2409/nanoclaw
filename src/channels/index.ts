@@ -7,4 +7,5 @@
 // self-registration import below.
 
 import './cli.js';
+import './email.js';
 import './matrix.js';

@@ -534,6 +534,8 @@ describe('subagent logging notice', () => {
     expect(text).toContain('websearch');
     expect(text).toContain('haiku');
     expect(out[0].platform_id).toBe('chan-1');
+    // Diagnostic, not ordinary chat — see the token-usage notice test.
+    expect(out[0].kind).toBe('notice');
     // The notice is a side-channel write, never a push into the agent's own
     // SDK stream — it must not appear as a nudge/follow-up.
     expect(pushes).toHaveLength(0);
@@ -595,6 +597,11 @@ describe('token usage notice', () => {
     expect(text).toContain('sonnet: 1,250 ($0.08)');
     expect(text).toContain('haiku: 400 ($0.01)');
     expect(out[0].platform_id).toBe('chan-1');
+    // Marked as a diagnostic, not ordinary chat: the host suppresses these on
+    // channels that declare they don't carry notices (email). Falling back to
+    // 'chat' here would silently mail the operator's token cost to whoever
+    // the agent is corresponding with.
+    expect(out[0].kind).toBe('notice');
     // Side-channel write, never a push into the agent's own SDK stream.
     expect(pushes).toHaveLength(0);
   });

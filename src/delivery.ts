@@ -31,6 +31,7 @@ import { runGuarded, type DeliveryGuardSpec, type GuardedDeliveryHandler } from 
 import { isUnguarded, type Unguarded } from './guard/index.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
+import { channelDeliversNotices } from './channels/channel-registry.js';
 import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import type { OutboundFile } from './channels/adapter.js';
@@ -284,6 +285,20 @@ async function deliverMessage(
     } else {
       log.warn('task_log row outside a task session — ignoring', { id: msg.id, sessionId: session.id });
     }
+    return;
+  }
+
+  // Diagnostic notice ("📊 Tokens: …", "🔎 Subagent: …"). These are
+  // operator-facing chatter, cheap on a chat channel and wrong on a channel
+  // where every message costs something durable — an email correspondent
+  // would get one extra mail per turn, carrying this install's model choice
+  // and USD cost. Suppressed rather than failed: returning here marks the row
+  // delivered, so it isn't retried into a permanent failure.
+  if (msg.kind === 'notice' && msg.channel_type && !channelDeliversNotices(msg.channel_type)) {
+    log.debug('Suppressing notice on a channel that does not carry them', {
+      id: msg.id,
+      channelType: msg.channel_type,
+    });
     return;
   }
 

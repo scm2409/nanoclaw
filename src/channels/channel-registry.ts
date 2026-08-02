@@ -200,6 +200,22 @@ export function hasDeclaredChannelDefaults(key: string, channelType?: string): b
   return lookupDeclaredDefaults(key, channelType).decl !== undefined;
 }
 
+/**
+ * Whether diagnostic notices (`kind: 'notice'`) may be delivered on this
+ * channel. Same resolution order as getChannelDefaults — live adapter first,
+ * then the offline registration — and true unless something says otherwise,
+ * so an unknown or stale channel keeps the pre-flag behaviour.
+ */
+export function channelDeliversNotices(key: string, channelType?: string): boolean {
+  const { live } = lookupDeclaredDefaults(key, channelType);
+  if (live?.deliversNotices !== undefined) return live.deliversNotices;
+
+  const typeKey = live?.channelType ?? channelType;
+  const registered =
+    registry.get(key)?.deliversNotices ?? (typeKey !== undefined ? registry.get(typeKey)?.deliversNotices : undefined);
+  return registered ?? true;
+}
+
 /** Shared tiers 1-4 of getChannelDefaults (see its doc); `decl` undefined
  *  means only tier 5 (fallback) remains. */
 function lookupDeclaredDefaults(

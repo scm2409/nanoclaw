@@ -230,6 +230,21 @@ export interface ChannelAdapter {
   openDM?(userHandle: string): Promise<string>;
 
   /**
+   * Whether this channel carries diagnostic notices (`kind: 'notice'` rows —
+   * the token-usage and subagent lines the container writes as a side channel
+   * when those options are on).
+   *
+   * Absent means true: every chat channel takes them, which is the behaviour
+   * that existed before this flag. Set false on channels where an extra
+   * message is not free — email, where each notice would be its own mail in
+   * someone's inbox, and where a mail to a correspondent who isn't the
+   * operator would carry the install's model choice and USD cost. That last
+   * part is why this is an adapter-level property rather than a setting: it
+   * is a disclosure boundary, not a preference.
+   */
+  deliversNotices?: boolean;
+
+  /**
    * Declared wiring-time defaults for this channel. Optional for backward
    * compatibility with stale adapter copies; absent → core fallback
    * (fallbackChannelDefaults(supportsThreads), see channel-registry.ts).
@@ -253,6 +268,12 @@ export interface ChannelRegistration {
    * modules pass the same const here and to the adapter/bridge.
    */
   defaults?: ChannelDefaults;
+  /**
+   * Same declaration as ChannelAdapter.deliversNotices, resolvable without
+   * instantiating the adapter — delivery reads it for channels whose factory
+   * returned null (missing credentials) but which still have rows queued.
+   */
+  deliversNotices?: boolean;
   containerConfig?: {
     mounts?: Array<{ hostPath: string; containerPath: string; readonly: boolean }>;
     env?: Record<string, string>;
