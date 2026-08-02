@@ -158,3 +158,9 @@ Before telling the user anything is ready:
 Any fork-local change needs a `FORK-CHANGELOG.md` entry (newest first, prose, no commit shas)
 before the session ends — see `docs/fork-changelog.md` and the banner at the top of `CLAUDE.md`.
 Write the entry as part of the work, before asking to commit.
+
+If the change alters anything described in `groups/main-agent/nanoclaw-overview.md`
+(channels, subagents, Nextcloud scope, open items), update that file too, in the same
+session — see the Fork/Config Changelog sections in root `CLAUDE.md`. Easy to miss
+because it's gitignored (hand-maintained, not part of any commit diff): it stayed
+stale through the email-channel change until a live conversation surfaced the gap.

@@ -11,6 +11,22 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-02 — overview-doc update rule surfaced in the coding skill, doc gap closed
+
+KaiL01 had kept an old Nextcloud Deck card open researching mail providers with a
+*native* two-way address allowlist, unaware that the email channel added 2026-08-01
+enforces that allowlist inside NanoClaw itself — so no provider capability is
+required and the research question was already moot. Traced this to two doc gaps:
+`groups/main-agent/nanoclaw-overview.md` never said outright that Nextcloud has no
+mail app or that the allowlist is host-enforced (both added now), and the instruction
+to keep that file in sync with capability changes lived only in root `CLAUDE.md`'s
+Fork/Config Changelog sections — not in `.claude/skills/nanoclaw-coding/SKILL.md`,
+the skill actually loaded before coding sessions on this repo, which is why it was
+missed for the email-channel change. Added a bullet there pointing back at the same
+rule.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-01 — KaiL01 self-description doc shared between Claude Code and the agent
 
 Added `groups/main-agent/nanoclaw-overview.md`: a plain doc describing what
