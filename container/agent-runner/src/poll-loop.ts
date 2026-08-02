@@ -24,6 +24,7 @@ import {
   stripInternalTags,
   type RoutingContext,
 } from './formatter.js';
+import { isTurnSend, markTurnStart, turnSendKeys } from './turn-sends.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
 
@@ -539,6 +540,9 @@ export async function processQuery(
     })();
   }, ACTIVE_POLL_INTERVAL_MS);
 
+  // Echo suppression dedupes within one turn only; anchor the first turn here.
+  markTurnStart();
+
   try {
     for await (const event of query.events) {
       handleEvent(event, routing);
@@ -638,6 +642,9 @@ export async function processQuery(
             if (!willRetryWrapping && !willRetryTaskBlocks) archivePrompts.shift();
           }
         } else archivePrompts.shift();
+        // Turn boundary: a follow-up pushed into this same stream is a new
+        // turn and must not dedupe against what the previous one sent.
+        markTurnStart();
       }
     }
   } catch (err) {
@@ -784,11 +791,16 @@ export interface TaskMessageBlock {
 export function dispatchResultText(
   text: string,
   routing: RoutingContext,
-): { sent: number; hasUnwrapped: boolean; taskBlocks: TaskMessageBlock[] } {
+): { sent: number; suppressed: number; hasUnwrapped: boolean; taskBlocks: TaskMessageBlock[] } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
   let sent = 0;
+  // Blocks dropped as verbatim repeats of a send_message call made earlier in
+  // this same turn — delivered already, just not from here. Snapshotted before
+  // any delivery below, so blocks never match against each other.
+  let suppressed = 0;
+  const alreadySent = turnSendKeys();
   // <message to> blocks left inert in a task run — drives the same-turn
   // "use send_message" nudge in processQuery.
   const taskBlocks: TaskMessageBlock[] = [];
@@ -821,6 +833,16 @@ export function dispatchResultText(
       scratchpadParts.push(`[dropped: unknown destination "${toName}"] ${body}`);
       continue;
     }
+    // The agent already sent this exact text to this destination via
+    // send_message this turn — the final block is an echo of it, not a second
+    // message. Delivering both is the duplicate-reply bug. See turn-sends.ts.
+    if (isTurnSend(alreadySent, destChannelType(dest), destPlatformId(dest), body)) {
+      log(`Suppressed final <message to="${toName}"> — verbatim echo of a send_message call this turn`);
+      scratchpadParts.push(`[suppressed echo → ${toName}] ${body}`);
+      suppressed++;
+      continue;
+    }
+
     sendToDestination(dest, body, routing);
     sent++;
   }
@@ -836,11 +858,13 @@ export function dispatchResultText(
 
   // In a task run, plain final text is the NORMAL ending (it becomes the run
   // log) — never treat it as an undelivered reply or nudge the agent to wrap it.
-  const hasUnwrapped = !routing.taskRun && sent === 0 && !!scratchpad;
+  // A suppressed echo counts as delivered: nudging there would tell the agent
+  // its reply never landed and prompt a re-send, recreating the duplicate.
+  const hasUnwrapped = !routing.taskRun && sent === 0 && suppressed === 0 && !!scratchpad;
   if (hasUnwrapped) {
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
-  return { sent, hasUnwrapped, taskBlocks };
+  return { sent, suppressed, hasUnwrapped, taskBlocks };
 }
 
 /**
@@ -901,9 +925,18 @@ export function autoAppendTaskLog(text: string): void {
   log('Task run log auto-appended from final text');
 }
 
+/** The routing identity of a destination — shared by delivery and echo lookup. */
+function destPlatformId(dest: DestinationEntry): string {
+  return dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
+}
+
+function destChannelType(dest: DestinationEntry): string {
+  return dest.type === 'channel' ? dest.channelType! : 'agent';
+}
+
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
-  const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
-  const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
+  const platformId = destPlatformId(dest);
+  const channelType = destChannelType(dest);
   // Resolve thread_id per-destination from the most recent inbound message
   // that came from this same channel+platform. In agent-shared sessions,
   // different destinations have different thread contexts — using a single

@@ -11,6 +11,54 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-02 — duplicate replies: a final-text block that only echoes a tool send is dropped
+
+Matrix answers started arriving twice. The cause was not Matrix, not the network and
+not a send retry — the duplicate already existed in `outbound.db` before any channel
+adapter saw it. The agent delivered the same text twice: once via the `send_message`
+MCP tool mid-turn, then again as a `<message to="…">` block in its final response,
+which `dispatchResultText` dutifully delivered as a second message. The token-usage
+notice appearing between the two copies was the tell: in the result handler
+`deliverTokenUsageNotice` runs before `dispatchResultText`, so the order is always
+tool send, notice, echo.
+
+The transcript for the two reported incidents (17:59 and 19:35) shows the tool call
+and the final block carrying byte-identical text, 435 and 370 characters. The class
+was already known — `dispatchResultText` names it "the double-delivery class" in a
+comment — but the guard beneath that comment only applies to task runs, so ordinary
+chat sessions had none. It had also been hit before, in `ca52d2c6`
+("stop emitting the greeting twice"), and was addressed there only by rewording the
+instructions; prose does not reliably constrain the model, so it came back.
+
+New `turn-sends.ts` marks where `outbound.db` stood when a turn began and collects
+what was delivered since. `dispatchResultText` snapshots that once per final dispatch
+and drops a block whose destination and text repeat one of those sends. Matching is
+exact after whitespace normalization — both incidents repeated the text verbatim, so
+nothing looser is warranted, and anything looser could swallow a real follow-up. The
+"quick acknowledgment, then the actual answer" pattern is untouched: only a verbatim
+repeat is suppressed, and only against sends that predate the dispatch, so two
+identical blocks in one response both still deliver.
+
+Suppression reads the session DB rather than an in-process registry, and that is the
+whole point rather than an implementation detail: the MCP tools run as a separate
+`bun run mcp-tools/index.ts` subprocess, so anything the tool records in module state
+is invisible to the poll loop. A first attempt did use a shared `Set`; its unit tests
+passed because `bun test` runs everything in one process, and it then failed on the
+first live message. The shared session DB is the only channel between the two, the
+same way it is between host and container. A regression test now writes the row
+directly, standing in for that subprocess.
+
+A suppressed echo also counts as delivered for the re-wrap nudge. Without that, a
+result consisting only of the echo would look like nothing was sent, and the nudge
+would ask the agent to send its response again — recreating the duplicate by another
+route.
+
+Verified end to end, not just in tests: the same forced double-send that produced two
+rows before the fix produces one after, and a tool send followed by a genuinely
+different final block still produces two.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-02 — overview-doc update rule surfaced in the coding skill, doc gap closed
 
 KaiL01 had kept an old Nextcloud Deck card open researching mail providers with a
