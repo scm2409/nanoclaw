@@ -288,6 +288,16 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // can stamp it on outbound rows — needed for a2a return-path routing.
     setCurrentInReplyTo(routing.inReplyTo);
 
+    // The stop signal has to reach an IN-FLIGHT turn, not just the gap
+    // between polls. A provider stream can stay open indefinitely, so a loop
+    // that only checked the signal at the top of the iteration never exited
+    // at all — which is the whole reason the signal exists (see PollLoopConfig
+    // .signal). Aborting the query is the same mechanism the pending-command
+    // path below already uses.
+    const abortActiveQuery = (): void => query.abort();
+    config.signal?.addEventListener('abort', abortActiveQuery, { once: true });
+    if (config.signal?.aborted) query.abort();
+
     try {
       const result = await processQuery(
         query,
@@ -333,6 +343,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       log(`Errored batch will be acked completed — ${processingIds.length} message(s), no redelivery`);
     } finally {
       clearCurrentInReplyTo();
+      config.signal?.removeEventListener('abort', abortActiveQuery);
     }
 
     // Ensure completed even if processQuery ended without a result event

@@ -56,6 +56,72 @@ matching how `CONFIG-CHANGELOG.md` itself is kept (no new `Stop` hook, since
 
 vibecoded with Claude Sonnet 5
 
+## 2026-08-02 — container tests could leak a running poll loop into other test files
+
+`bun test` runs every test file in a single process, and the container's session
+DBs are module-level in-memory singletons (`db/connection.ts`). State is therefore
+shared across files, and a poll loop that outlives the test which started it keeps
+polling that shared database — quietly eating pending messages belonging to later
+tests, in other files.
+
+Both places that start a loop leaked one:
+
+- `integration.test.ts` raced `runPollLoop` against an abort listener and a timeout,
+  and awaited *that race*. The race settles the instant `abort()` is called while the
+  loop itself is still mid-turn, so the test returned with the loop still running.
+- `upload-trace.test.ts` never passed the signal to `runPollLoop` at all, so nothing
+  short of process exit could stop its loop.
+
+And the signal did not actually work anyway: `runPollLoop` only checked it between
+poll iterations, while a provider stream can stay open indefinitely — so the one
+mechanism documented as existing "so an abandoned loop actually exits" did not exit.
+The signal is now also wired to `query.abort()` for the in-flight turn, the same
+mechanism the pending-slash-command path already used. Production is unaffected: no
+signal is passed there.
+
+The symptom was a test in a *different* file (`task-run turn wiring`) timing out
+because its message had been consumed, appearing and disappearing with file execution
+order. It surfaced while working on the email channel and looked like a regression
+from it; it is not, and reproduces on the previous commit once the file order flips.
+Chasing it needed four bisections — worth recording, because the natural conclusion
+("must be the change in the tree") was wrong twice.
+
+New `src/testing/poll-loop-harness.ts`: `startPollLoop` always passes the signal, and
+`stopPollLoop` aborts and then WAITS for the loop to genuinely finish, throwing if it
+does not. A leak now fails the test that caused it, in the file that caused it,
+instead of a stranger three files later.
+
+vibecoded with Claude Opus 5
+
+## 2026-08-02 — diagnostic notices are no longer delivered on every channel
+
+The token-usage ("📊 Tokens: …") and subagent ("🔎 Subagent: …") lines the container
+writes when `show_token_usage` / `log_subagents` are on were plain `kind: 'chat'` rows,
+delivered wherever the turn was routed. On a chat channel that is one extra line and
+nobody minds. On the new email channel it was one extra *mail per turn* — in practice
+three mails arrived where one was expected.
+
+The noise is the visible half. The real problem is that a notice goes to whoever the
+turn was addressed to, so a mail to a correspondent who is not the operator would have
+carried this install's model choice and USD cost. That is a disclosure, which is why
+the fix is a property of the channel rather than a setting someone could get wrong:
+`ChannelAdapter.deliversNotices` (absent = true, so every existing channel is
+unchanged), resolved by `channelDeliversNotices()` in the registry with the same
+live-adapter-then-registration order as the channel defaults. The email adapter
+declares `false`.
+
+The container now writes those two side-channel rows as `kind: 'notice'` instead of
+`'chat'`, and `src/delivery.ts` drops notice rows for channels that don't carry them —
+returning rather than throwing, so the row is marked delivered instead of being
+retried into a permanent failure. Ordinary chat on the same channel is untouched.
+
+Tests: `src/delivery-notices.test.ts` for the host half (including that a suppressed
+notice is marked delivered, and that real messages still go out on the same channel),
+plus `kind` assertions on the two existing container notice tests so a revert to
+`'chat'` cannot pass silently.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-01 — email channel with a per-address allowlist in both directions
 
 Added a native email channel (`src/channels/email.ts`, IMAP in via `imapflow`, SMTP
@@ -105,6 +171,42 @@ Also added `.claude/skills/add-email/SKILL.md` (setup, allowlist management,
 verification) and `container/skills/email-formatting/SKILL.md`, which tells the agent
 the attachment numbers so it checks file sizes before attaching instead of
 discovering the limit by failing a send.
+
+**Live suite.** `pnpm test:email-live` (`src/channels/email.live.test.ts`, excluded
+from `pnpm test` like the Matrix live suite) runs the full round trip against a real
+local mail server — GreenMail in Docker, started by `scripts/greenmail.sh up`. It
+injects mail over SMTP, lets the adapter read it over IMAP, and reads the adapter's
+replies back out of the recipient's own IMAP mailbox, covering both allowlist
+directions, attachments both ways, both size refusals, and the loop guard in ~9s
+without a real mailbox or a single real recipient. A mail-testing SaaS was considered
+and rejected: Mailtrap's sandbox cannot be read over IMAP at all, so it can only
+exercise the outbound half — and the inbound half is where the allowlist lives.
+
+That suite immediately paid for itself by finding two bugs no unit test could have,
+both since fixed: (1) the scan issued the `\Seen` store while the FETCH generator was
+still open, which killed the connection after the very first message; the scan now
+drains the fetch into a bounded batch (25 messages, re-queueing) before touching the
+connection again. (2) There was no reconnect at all — one dropped socket left the
+adapter logging `Connection not available` once per poll forever, receiving nothing,
+while `isConnected()` still reported healthy. For a channel that runs for months
+against servers that time out IDLE sessions and restart, that is a when, not an if.
+Reconnect now backs off 2s→60s, and resets the backoff only after a connection has
+held for 60s, so a server that accepts the socket and drops it immediately is not
+retried every 2s forever. `src/channels/email-reconnect.test.ts` pins that behaviour
+with a fake client, since the live suite never severs the connection itself.
+
+The provisioning logic moved to `src/channels/email-provisioning.ts` with
+`scripts/email-allow.ts` as a thin CLI over it — the live suite needs it, and `src/`
+importing from `scripts/` breaks the build's `rootDir`.
+
+**Directions are separate permissions** (`--direction in|out|both`, default `both`).
+The first cut could only open both halves at once, which cannot express the setup it
+was built for: several people may write to the agent, while the agent answers to one
+address only. Inbound is the `agent_group_members` row, outbound the
+`agent_destinations` row, so the two were always independently expressible — only the
+provisioning tool conflated them. `add` is declarative rather than additive: re-running
+with a narrower direction closes the other half, because on this surface a wrong entry
+must be fixable in place rather than needing a remove/re-add cycle.
 
 vibecoded with Claude Opus 5
 

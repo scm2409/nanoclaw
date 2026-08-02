@@ -5,7 +5,7 @@ import { getUndeliveredMessages } from './db/messages-out.js';
 import { getPendingMessages } from './db/messages-in.js';
 import type { MessageInRow } from './db/messages-in.js';
 import { MockProvider } from './providers/mock.js';
-import { runPollLoop } from './poll-loop.js';
+import { startPollLoop, stopPollLoop } from './testing/poll-loop-harness.js';
 import { isUploadTraceCommand } from './upload-trace.js';
 
 beforeEach(() => {
@@ -46,10 +46,10 @@ describe('poll loop — /upload-trace command', () => {
     // absence proves the runner intercepted /upload-trace instead of the LLM.
     const provider = new MockProvider({}, () => '<message to="discord-test">should not run</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 5000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 5000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
@@ -61,19 +61,9 @@ describe('poll loop — /upload-trace command', () => {
     // Command message was completed (not left pending).
     expect(getPendingMessages()).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
   });
 });
 
-async function runPollLoopWithTimeout(provider: MockProvider, signal: AbortSignal, timeoutMs: number): Promise<void> {
-  return Promise.race([
-    runPollLoop({ provider, providerName: 'mock', cwd: '/tmp' }),
-    new Promise<void>((_, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('aborted')));
-    }),
-    new Promise<void>((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
-  ]);
-}
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();

@@ -6,7 +6,7 @@ import { getPendingMessages } from './db/messages-in.js';
 import { getContinuation, setContinuation } from './db/session-state.js';
 import { MockProvider } from './providers/mock.js';
 import type { ProviderExchange } from './providers/types.js';
-import { runPollLoop } from './poll-loop.js';
+import { startPollLoop, stopPollLoop } from './testing/poll-loop-harness.js';
 
 beforeEach(() => {
   initTestSessionDb();
@@ -39,10 +39,10 @@ describe('poll loop integration', () => {
     const provider = new MockProvider({}, () => '<message to="discord-test">42</message>');
 
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
@@ -55,7 +55,6 @@ describe('poll loop integration', () => {
     const pending = getPendingMessages();
     expect(pending).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
   });
 
   it('should process multiple messages in a batch', async () => {
@@ -64,16 +63,15 @@ describe('poll loop integration', () => {
 
     const provider = new MockProvider({}, () => '<message to="discord-test">Got both messages</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toBe('Got both messages');
 
-    await loopPromise.catch(() => {});
   });
 
   it('should resolve thread_id per-destination, not from global routing', async () => {
@@ -94,10 +92,10 @@ describe('poll loop integration', () => {
       '<message to="discord-test">reply-d</message><message to="slack-test">reply-s</message>',
     );
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length >= 2, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     const discordOut = out.find((m) => m.platform_id === 'chan-1');
@@ -111,7 +109,6 @@ describe('poll loop integration', () => {
     expect(slackOut!.thread_id).toBe('slack-thread-99');
     expect(slackOut!.in_reply_to).toBe('m-slack');
 
-    await loopPromise.catch(() => {});
   });
 
   it('bare text produces no outbound messages (scratchpad only)', async () => {
@@ -120,16 +117,15 @@ describe('poll loop integration', () => {
     // Agent responds with bare text — no <message to="..."> wrapping
     const provider = new MockProvider({}, () => 'I am thinking about this...');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     // Wait long enough for the poll loop to process
     await sleep(1000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
   });
 
   it('unknown destination is dropped, valid destination is sent', async () => {
@@ -140,10 +136,10 @@ describe('poll loop integration', () => {
       () => '<message to="nonexistent">dropped</message><message to="discord-test">delivered</message>',
     );
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     // Only the valid destination should produce output
@@ -151,7 +147,6 @@ describe('poll loop integration', () => {
     expect(JSON.parse(out[0].content).text).toBe('delivered');
     expect(out[0].platform_id).toBe('chan-1');
 
-    await loopPromise.catch(() => {});
   });
 
   it('multiple <message> blocks each produce an outbound message', async () => {
@@ -169,10 +164,10 @@ describe('poll loop integration', () => {
       () => '<message to="discord-test">for discord</message><message to="slack-test">for slack</message>',
     );
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length >= 2, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(2);
@@ -183,7 +178,6 @@ describe('poll loop integration', () => {
     expect(slack).toBeDefined();
     expect(JSON.parse(slack!.content).text).toBe('for slack');
 
-    await loopPromise.catch(() => {});
   });
 
   it('sends null thread_id when no prior inbound from destination', async () => {
@@ -200,17 +194,16 @@ describe('poll loop integration', () => {
 
     const provider = new MockProvider({}, () => '<message to="slack-new">hello slack</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(out[0].platform_id).toBe('chan-new');
     expect(out[0].thread_id).toBeNull();
 
-    await loopPromise.catch(() => {});
   });
 
   it('resolves most recent thread_id when destination has multiple inbound messages', async () => {
@@ -220,35 +213,33 @@ describe('poll loop integration', () => {
 
     const provider = new MockProvider({}, () => '<message to="discord-test">reply</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(out[0].thread_id).toBe('thread-new');
     expect(out[0].in_reply_to).toBe('m-new');
 
-    await loopPromise.catch(() => {});
   });
 
   it('should process messages arriving after loop starts', async () => {
     const provider = new MockProvider({}, () => '<message to="discord-test">Processed</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 3000);
+    const loop = startPollLoop(provider, controller.signal);
 
     // Insert message after loop has started
     await sleep(200);
     insertMessage('m-late', { sender: 'Charlie', text: 'Late arrival' });
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out.length).toBeGreaterThanOrEqual(1);
 
-    await loopPromise.catch(() => {});
   });
 
   it('internal tags between message blocks are stripped from scratchpad', async () => {
@@ -259,16 +250,15 @@ describe('poll loop integration', () => {
       () => '<internal>thinking about this...</internal><message to="discord-test">answer</message><internal>done thinking</internal>',
     );
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toBe('answer');
 
-    await loopPromise.catch(() => {});
   });
 
   it('handles mixed task + chat batch with correct origin metadata', async () => {
@@ -284,35 +274,20 @@ describe('poll loop integration', () => {
 
     const provider = new MockProvider({}, () => '<message to="discord-test">done</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(out[0].platform_id).toBe('chan-1');
 
-    await loopPromise.catch(() => {});
   });
 
 });
 
 // Helper: run poll loop until aborted or timeout
-async function runPollLoopWithTimeout(provider: MockProvider, signal: AbortSignal, timeoutMs: number): Promise<void> {
-  return Promise.race([
-    runPollLoop({
-      provider,
-      providerName: 'mock',
-      cwd: '/tmp',
-      signal,
-    }),
-    new Promise<void>((_, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('aborted')));
-    }),
-    new Promise<void>((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
-  ]);
-}
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
@@ -343,10 +318,10 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
 
     const provider = new HookedMockProvider({}, () => '<message to="discord-test">archived answer</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => provider.exchanges.length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     expect(provider.exchanges.length).toBe(1);
     const exchange = provider.exchanges[0];
@@ -355,7 +330,6 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
     expect(exchange.continuation).toStartWith('mock-session-');
     expect(exchange.status).toBe('completed');
 
-    await loopPromise.catch(() => {});
   });
 
   it('does not report the internal wrapping-retry nudge as a user prompt', async () => {
@@ -368,10 +342,10 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
       return calls === 1 ? 'unwrapped text' : '<message to="discord-test">wrapped now</message>';
     });
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 3000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => provider.exchanges.length >= 2, 3000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     // Both exchanges attribute themselves to the real user prompt, never the nudge.
     for (const exchange of provider.exchanges) {
@@ -380,7 +354,6 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
     }
     expect(provider.exchanges.map((e) => e.status)).toEqual(['undelivered', 'completed']);
 
-    await loopPromise.catch(() => {});
   });
 
   it('a throwing hook never breaks delivery', async () => {
@@ -393,16 +366,15 @@ describe('poll loop — exchange hook (onExchangeComplete)', () => {
     }
     const provider = new ThrowingHookProvider({}, () => '<message to="discord-test">delivered anyway</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out.length).toBe(1);
     expect(out[0].content).toContain('delivered anyway');
 
-    await loopPromise.catch(() => {});
   });
 });
 
@@ -412,10 +384,10 @@ describe('poll loop — provider error recovery', () => {
 
     const provider = new ThrowingProvider('API rate limit exceeded');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider as unknown as MockProvider, controller.signal, 2000);
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
@@ -426,7 +398,6 @@ describe('poll loop — provider error recovery', () => {
     const pending = getPendingMessages();
     expect(pending).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
   });
 });
 
@@ -440,10 +411,10 @@ describe('poll loop — stale session recovery', () => {
 
     const provider = new InvalidSessionProvider();
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider as unknown as MockProvider, controller.signal, 2000);
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     // Error was written to outbound
     const out = getUndeliveredMessages();
@@ -453,7 +424,6 @@ describe('poll loop — stale session recovery', () => {
     // Continuation was cleared (isSessionInvalid returned true)
     expect(getContinuation('mock')).toBeUndefined();
 
-    await loopPromise.catch(() => {});
   });
 });
 
@@ -473,10 +443,10 @@ describe('poll loop — /clear command', () => {
 
     const provider = new MockProvider({}, () => '<message to="discord-test">should not run</message>');
     const controller = new AbortController();
-    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    const loop = startPollLoop(provider, controller.signal);
 
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
@@ -489,7 +459,6 @@ describe('poll loop — /clear command', () => {
     const pending = getPendingMessages();
     expect(pending).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
   });
 });
 
@@ -565,7 +534,7 @@ describe('poll loop — slash command during active query', () => {
     // deterministic CI failure while passing everywhere else (macOS + Linux
     // dev boxes run it in ~0.6s; success aborts the loop early, so the large
     // ceilings cost nothing on the happy path).
-    const loopPromise = runPollLoopWithTimeout(provider as unknown as MockProvider, controller.signal, 20000);
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
 
     await waitFor(() => provider.queries === 1, 15000);
     insertMessage('m-clear-active', { sender: 'Alice', text: '/clear' }, { platformId: 'chan-1', channelType: 'discord' });
@@ -575,13 +544,12 @@ describe('poll loop — slash command during active query', () => {
       () => getUndeliveredMessages().some((msg) => JSON.parse(msg.content).text === 'Session cleared.'),
       15000,
     );
-    controller.abort();
+    await stopPollLoop(controller, loop);
 
     expect(provider.ends).toBe(0);
     expect(getContinuation('mock')).toBeUndefined();
     expect(getPendingMessages()).toHaveLength(0);
 
-    await loopPromise.catch(() => {});
     },
     30000,
   );
