@@ -726,10 +726,33 @@ function deliverSubagentNotice(
 }
 
 /**
+ * Last cumulative per-model totals seen from the provider, so the next turn
+ * can be reported as a difference. Process-global on purpose: the SDK's
+ * counter is process-global too, and a turn is one `processQuery` call.
+ */
+let tokenUsageBaseline: Record<string, { tokens: number; costUSD: number }> = {};
+
+/** Drop the baseline. Tests only — the process never needs to forget. */
+export function resetTokenUsageBaseline(): void {
+  tokenUsageBaseline = {};
+}
+
+/**
  * Deliver a live notice summarizing per-model token/cost usage for the turn
  * that just completed, when `showTokenUsage` is enabled. Written straight to
  * messages_out — never `query.push()` — same side-channel contract as
  * `deliverSubagentNotice`.
+ *
+ * The SDK's `modelUsage` is a **running total for the whole session**, not for
+ * this turn: it accumulates over every API call the process makes and is
+ * restored on resume. Reporting it verbatim made a one-word reply read as 1.4M
+ * tokens. So each model is reported as the difference against the previous
+ * turn. A total that went backwards means the SDK session started over (fresh
+ * container), in which case the current value *is* the turn's usage.
+ *
+ * Subagents are covered without any extra work: their usage lands in
+ * `modelUsage` under the model they ran on, so a subagent-only model shows up
+ * as a difference against zero on the turn that used it.
  */
 function deliverTokenUsageNotice(
   modelUsage: Record<
@@ -739,10 +762,20 @@ function deliverTokenUsageNotice(
   routing: RoutingContext,
 ): void {
   if (isAgentToAgentRoute(routing)) return;
-  const lines = Object.entries(modelUsage).map(([model, u]) => {
+  const lines: string[] = [];
+  for (const [model, u] of Object.entries(modelUsage)) {
     const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
-    return `${model}: ${total.toLocaleString()} ($${u.costUSD.toFixed(2)})`;
-  });
+    const previous = tokenUsageBaseline[model];
+    const restarted = previous !== undefined && total < previous.tokens;
+    const tokens = previous && !restarted ? total - previous.tokens : total;
+    const costUSD = previous && !restarted ? u.costUSD - previous.costUSD : u.costUSD;
+    tokenUsageBaseline[model] = { tokens: total, costUSD: u.costUSD };
+    if (tokens <= 0) continue;
+    lines.push(`${model}: ${tokens.toLocaleString()} ($${costUSD.toFixed(2)})`);
+  }
+  // Nothing consumed (or nothing reported) — stay quiet rather than deliver a
+  // bare "📊 Tokens:" with no numbers behind it.
+  if (lines.length === 0) return;
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,

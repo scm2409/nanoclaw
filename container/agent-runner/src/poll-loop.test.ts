@@ -4,12 +4,13 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
-import { isCorruptionError, processQuery } from './poll-loop.js';
+import { isCorruptionError, processQuery, resetTokenUsageBaseline } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import type { AgentQuery, ProviderEvent } from './providers/types.js';
 
 beforeEach(() => {
   initTestSessionDb();
+  resetTokenUsageBaseline();
 });
 
 afterEach(() => {
@@ -558,19 +559,24 @@ describe('subagent logging notice', () => {
   });
 });
 
+type UsageMap = NonNullable<Extract<ProviderEvent, { type: 'result' }>['modelUsage']>;
+
+/** Per-model usage totals in the shape the SDK reports them. */
+function usage(inputTokens: number, outputTokens: number, cacheReadInputTokens: number, costUSD: number) {
+  return { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens: 0, costUSD };
+}
+
+const DEFAULT_USAGE: UsageMap = {
+  sonnet: usage(1000, 200, 50, 0.08),
+  haiku: usage(300, 100, 0, 0.01),
+};
+
 /** Build a query that yields init, then a result carrying per-model token usage. */
-function makeTokenUsageQuery(): { query: AgentQuery; pushes: string[] } {
+function makeTokenUsageQuery(modelUsage: UsageMap = DEFAULT_USAGE): { query: AgentQuery; pushes: string[] } {
   const pushes: string[] = [];
   async function* events(): AsyncGenerator<ProviderEvent> {
     yield { type: 'init', continuation: 'sess-1' };
-    yield {
-      type: 'result',
-      text: null,
-      modelUsage: {
-        sonnet: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, costUSD: 0.08 },
-        haiku: { inputTokens: 300, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.01 },
-      },
-    };
+    yield { type: 'result', text: null, modelUsage };
   }
   return {
     pushes,
@@ -620,6 +626,56 @@ describe('token usage notice', () => {
     await processQuery(query, AGENT_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, false, true);
 
     expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+
+  // The SDK's modelUsage is a running total for the whole session (it survives
+  // a resume), not this turn's usage. Reporting it raw made a one-word reply
+  // look like it cost 1.4M tokens. Every case below pins the subtraction.
+  async function runTurn(modelUsage?: UsageMap): Promise<string | null> {
+    const before = getUndeliveredMessages().length;
+    const { query } = makeTokenUsageQuery(modelUsage);
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, false, true);
+    const out = getUndeliveredMessages();
+    if (out.length === before) return null;
+    return JSON.parse(out[out.length - 1].content).text as string;
+  }
+
+  it('reports only this turn, not the session running total', async () => {
+    await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
+    const text = await runTurn({ sonnet: usage(1000, 260, 8050, 0.11) });
+
+    // 1,250 -> 9,310 cumulative: the turn itself was 8,060 tokens and $0.03.
+    expect(text).toContain('sonnet: 8,060 ($0.03)');
+    expect(text).not.toContain('9,310');
+  });
+
+  it('counts a subagent model that only appears mid-session', async () => {
+    await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
+    const text = await runTurn({
+      sonnet: usage(1000, 300, 50, 0.09),
+      haiku: usage(4000, 500, 0, 0.02),
+    });
+
+    expect(text).toContain('sonnet: 100 ($0.01)');
+    expect(text).toContain('haiku: 4,500 ($0.02)');
+  });
+
+  it('treats a counter that went backwards as a fresh session', async () => {
+    await runTurn({ sonnet: usage(100000, 5000, 900000, 4.2) });
+    // Container restarted: the SDK's totals start over from this turn's own usage.
+    const text = await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
+
+    expect(text).toContain('sonnet: 1,250 ($0.08)');
+  });
+
+  it('says nothing when the turn consumed nothing', async () => {
+    await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
+
+    expect(await runTurn({ sonnet: usage(1000, 200, 50, 0.08) })).toBeNull();
+  });
+
+  it('says nothing when the provider reports no usage at all', async () => {
+    expect(await runTurn({})).toBeNull();
   });
 });
 

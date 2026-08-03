@@ -11,6 +11,34 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-03 — the token notice was reporting the session total as if it were the message
+
+A one-word "pong" was announced as 1,425,827 tokens. The number was real, but it
+was not the message's: the Agent SDK's `modelUsage` is a running total for the
+whole session — it accumulates over every API call the process makes, lives in a
+process-global state object, and is restored on resume — while the notice printed
+it verbatim under a comment claiming it covered "the turn that just completed".
+The tests asserted the same wrong thing, so nothing caught it. Confirmed both ways
+before touching anything: the SDK binary accumulates with `r.inputTokens +=
+t.input_tokens` into a session-global object, and in the live session the counter
+rose 1,335,734 → 1,425,827 across the "ping" that produced that "pong" — 90k for
+the message itself.
+
+`deliverTokenUsageNotice` now keeps the last cumulative totals per model and
+reports the difference, so the notice says what the message cost and nothing else.
+A total that went backwards means the SDK session started over (fresh container),
+in which case the current value is the turn's usage. Models with no change are
+dropped, and a turn that consumed nothing stays silent instead of delivering a
+bare "📊 Tokens:" with no numbers — which is what the empty notices in the sweep
+session had been.
+
+Subagents need no special handling and are covered by a test: their usage lands in
+`modelUsage` under the model they ran on, so a subagent-only model is a difference
+against zero on the turn that used it. Verified live — a websearch turn reported
+`claude-sonnet-5: 132,392 ($0.05) · claude-haiku-4-5-20251001: 44,546 ($0.04)`.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-03 — Deck inbox handoff, and a gitignored home for install-specific facts
 
 Two pieces, one purpose: let the agent put a task in front of its user without
