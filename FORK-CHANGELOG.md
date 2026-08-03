@@ -11,6 +11,43 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-03 — Deck inbox handoff, and a gitignored home for install-specific facts
+
+Two pieces, one purpose: let the agent put a task in front of its user without
+being able to write to the user's own board, and keep the skill that does it free
+of any personal names.
+
+**The gate is a Deck board ACL.** The user's own board is shared read-only with the
+agent's Nextcloud account; a second board is shared with write access. The agent
+drops a card into that inbox board, the user reviews it and moves it onto their own
+board by hand. A write attempt on the user's board fails with 403 on the server
+regardless of what the agent intends — the same structural-rather-than-prompted
+review step as the calendar invitations. It is also the only way Deck can express
+this: permissions are per board, never per stack, so an "Inbox" stack on the user's
+own board would have been convention, not a gate.
+
+New container skill `nextcloud-deck-inbox` carries the conventions: resolve the
+boards from local facts and verify against `permissionEdit` from `deck_get_boards`
+before writing, never fall back to some other writable board, check both boards for
+a duplicate first, write a card that stands on its own at review time, notify once
+by chat — and, the part that is easy to get wrong, treat the card as a handoff
+rather than a completed task, because once the user moves it the agent has read
+access to it and nothing else.
+
+**`instructions.local.md`.** Skills under `container/skills/` are tracked and
+public, so board names, mailboxes, and hosts cannot live in them — but the agent
+still has to know which board is which, reliably, every session. The only
+always-in-context per-group document was `instructions.prepend.md`, which this fork
+tracks on purpose. So groups gained a second one: `instructions.local.md`, read by
+`readGroupLocalFacts()` and compiled by `composeGroupClaudeMd()` into a
+`local-facts.md` fragment imported right after the persona. It needed no
+`.gitignore` change — `groups/*/*` already excludes everything not explicitly
+re-included — and the existing reconcile loop prunes the fragment when the file
+goes away. Skills now say "your local facts" and stay shareable; the names live in
+one gitignored file per install.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-03 — the fork-changelog note in CLAUDE.md said the opposite of the truth
 
 `CLAUDE.md` claimed "this file is gitignored … it just never shows up in a diff or PR"

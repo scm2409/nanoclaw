@@ -8,6 +8,7 @@
  *   - optional per-MCP-server fragments (inline `instructions` field in
  *     `container.json`)
  *   - optional provider-neutral standing instructions
+ *   - optional install-specific facts (`instructions.local.md`, gitignored)
  *
  * Runs on every spawn from `container-runner.buildMounts()`. Deterministic —
  * same inputs produce the same CLAUDE.md, and stale fragments are pruned.
@@ -19,12 +20,18 @@ import path from 'path';
 import { GROUPS_DIR } from './config.js';
 import type { McpServerConfig } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
-import { readGroupPersona } from './group-persona.js';
+import { readGroupLocalFacts, readGroupPersona } from './group-persona.js';
 import type { AgentGroup } from './types.js';
 
 // Fragment holding a template's persona prepend. Imported FIRST (before the
 // shared base) so the persona is the top of the composed system prompt.
 const PERSONA_FRAGMENT = 'persona.md';
+
+// Fragment holding this install's own facts (`instructions.local.md`). Imported
+// right after the persona, so install-specific names sit next to the standing
+// instructions and ahead of everything generic. Gitignored at the source, which
+// is what keeps tracked skills free of personal names.
+const LOCAL_FACTS_FRAGMENT = 'local-facts.md';
 
 // Symlink targets are container paths — dangling on host (hence the readlink
 // dance instead of existsSync), valid inside the container via RO mounts.
@@ -37,7 +44,8 @@ const SHARED_MCP_TOOLS_CONTAINER_BASE = '/app/src/mcp-tools';
 const MCP_TOOLS_HOST_SUBPATH = path.join('container', 'agent-runner', 'src', 'mcp-tools');
 
 const COMPOSED_HEADER =
-  '<!-- Composed at spawn - do not edit. Standing instructions: instructions.prepend.md. Memory: memory/. -->';
+  '<!-- Composed at spawn - do not edit. Standing instructions: instructions.prepend.md. ' +
+  'Install-specific facts: instructions.local.md. Memory: memory/. -->';
 
 /**
  * Regenerate `groups/<folder>/CLAUDE.md` from the shared base, enabled skill
@@ -118,6 +126,12 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
     desired.set(PERSONA_FRAGMENT, { type: 'inline', content: persona });
   }
 
+  // Install-specific facts (if any) — inline, same reasoning as the persona.
+  const localFacts = readGroupLocalFacts(groupDir);
+  if (localFacts) {
+    desired.set(LOCAL_FACTS_FRAGMENT, { type: 'inline', content: localFacts });
+  }
+
   // Reconcile: drop stale, write desired.
   for (const existing of fs.readdirSync(fragmentsDir)) {
     if (!desired.has(existing)) {
@@ -134,13 +148,15 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
   }
 
   // Composed entry — imports only. Persona first (top of the system prompt),
-  // then the shared base, then the remaining fragments sorted.
+  // then this install's own facts, then the shared base, then the remaining
+  // fragments sorted.
+  const pinned = [PERSONA_FRAGMENT, LOCAL_FACTS_FRAGMENT];
   const imports: string[] = [];
-  if (desired.has(PERSONA_FRAGMENT)) {
-    imports.push(`@./.claude-fragments/${PERSONA_FRAGMENT}`);
+  for (const name of pinned) {
+    if (desired.has(name)) imports.push(`@./.claude-fragments/${name}`);
   }
   imports.push('@./.claude-shared.md');
-  for (const name of [...desired.keys()].filter((n) => n !== PERSONA_FRAGMENT).sort()) {
+  for (const name of [...desired.keys()].filter((n) => !pinned.includes(n)).sort()) {
     imports.push(`@./.claude-fragments/${name}`);
   }
   const body = [COMPOSED_HEADER, ...imports, ''].join('\n');

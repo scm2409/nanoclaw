@@ -17,7 +17,7 @@ vi.mock('./log.js', () => ({
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { ensureContainerConfig, updateContainerConfigScalars } from './db/container-configs.js';
 import { closeDb, createAgentGroup, initTestDb, runMigrations } from './db/index.js';
-import { PERSONA_PREPEND_FILE } from './group-persona.js';
+import { LOCAL_FACTS_FILE, PERSONA_PREPEND_FILE } from './group-persona.js';
 import type { AgentGroup } from './types.js';
 
 function group(id: string, folder: string): AgentGroup {
@@ -33,6 +33,12 @@ function writePersona(folder: string, text: string): void {
   const dir = path.join(GROUPS_DIR, folder);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, PERSONA_PREPEND_FILE), text);
+}
+
+function writeLocalFacts(folder: string, text: string): void {
+  const dir = path.join(GROUPS_DIR, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, LOCAL_FACTS_FILE), text);
 }
 
 function importsOf(folder: string): string[] {
@@ -89,6 +95,71 @@ describe('composeGroupClaudeMd persona prepend', () => {
     expect(imports[0]).toBe('@./.claude-shared.md');
     expect(imports).not.toContain('@./.claude-fragments/persona.md');
     expect(fs.existsSync(path.join(GROUPS_DIR, ag.folder, '.claude-fragments', 'persona.md'))).toBe(false);
+  });
+});
+
+describe('composeGroupClaudeMd local facts', () => {
+  it('imports the local-facts fragment after the persona and before the shared base', () => {
+    const ag = group('ag-local', 'local-group');
+    seed(ag);
+    writePersona(ag.folder, 'You are an SDR agent.\n');
+    writeLocalFacts(ag.folder, '## Boards\n\n- inbox board: "Drop Box"\n');
+
+    composeGroupClaudeMd(ag);
+
+    const imports = importsOf(ag.folder);
+    expect(imports[0]).toBe('@./.claude-fragments/persona.md');
+    expect(imports[1]).toBe('@./.claude-fragments/local-facts.md');
+    expect(imports[2]).toBe('@./.claude-shared.md');
+    expect(fs.readFileSync(path.join(GROUPS_DIR, ag.folder, '.claude-fragments', 'local-facts.md'), 'utf-8')).toBe(
+      '## Boards\n\n- inbox board: "Drop Box"',
+    );
+  });
+
+  it('imports local facts without a persona too', () => {
+    const ag = group('ag-local-only', 'local-only-group');
+    seed(ag);
+    writeLocalFacts(ag.folder, 'install-specific facts');
+
+    composeGroupClaudeMd(ag);
+
+    const imports = importsOf(ag.folder);
+    expect(imports[0]).toBe('@./.claude-fragments/local-facts.md');
+    expect(imports[1]).toBe('@./.claude-shared.md');
+  });
+
+  it('keeps the local facts across a second compose (not pruned)', () => {
+    const ag = group('ag-local-2', 'local-group-2');
+    seed(ag);
+    writeLocalFacts(ag.folder, 'facts body');
+
+    composeGroupClaudeMd(ag);
+    composeGroupClaudeMd(ag);
+
+    expect(fs.existsSync(path.join(GROUPS_DIR, ag.folder, '.claude-fragments', 'local-facts.md'))).toBe(true);
+    expect(importsOf(ag.folder)).toContain('@./.claude-fragments/local-facts.md');
+  });
+
+  it('prunes the fragment once the source file is removed', () => {
+    const ag = group('ag-local-3', 'local-group-3');
+    seed(ag);
+    writeLocalFacts(ag.folder, 'facts body');
+    composeGroupClaudeMd(ag);
+
+    fs.rmSync(path.join(GROUPS_DIR, ag.folder, LOCAL_FACTS_FILE));
+    composeGroupClaudeMd(ag);
+
+    expect(fs.existsSync(path.join(GROUPS_DIR, ag.folder, '.claude-fragments', 'local-facts.md'))).toBe(false);
+    expect(importsOf(ag.folder)).not.toContain('@./.claude-fragments/local-facts.md');
+  });
+
+  it('is inert when no local facts file is present', () => {
+    const ag = group('ag-no-local', 'no-local-group');
+    seed(ag);
+
+    composeGroupClaudeMd(ag);
+
+    expect(importsOf(ag.folder)[0]).toBe('@./.claude-shared.md');
   });
 });
 

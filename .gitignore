@@ -15,9 +15,11 @@ logs/
 # that makes this fork actually *ours*: standing persona and custom Task-tool
 # subagents. Those survive a fresh clone/reinstall and are part of this
 # fork's history like any other change. Explicitly still excluded: chat
-# transcripts (conversations/), personal memory (memory/), and anything
-# regenerated at spawn time (CLAUDE.md, container.json, .claude-fragments/ —
-# the last one is already excluded below).
+# transcripts (conversations/), personal memory (memory/), install-specific
+# facts (instructions.local.md — names boards, mailboxes, hosts; the reason
+# tracked skills can stay free of personal names), and anything regenerated
+# at spawn time (CLAUDE.md, container.json, .claude-fragments/ — the last one
+# is already excluded below).
 groups/*
 !groups/*/
 groups/*/*
