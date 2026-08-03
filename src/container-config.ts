@@ -21,6 +21,13 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   instructions?: string;
+  /**
+   * Withhold this server from the agent's main thread. Its tool schemas then
+   * cost nothing on ordinary turns; it is reachable only through a subagent
+   * that claims it by name in its `.claude/agents/*.md` frontmatter. See
+   * `buildAgentDefinitions` in the agent-runner's claude provider.
+   */
+  subagentOnly?: boolean;
 }
 
 export interface AdditionalMountConfig {

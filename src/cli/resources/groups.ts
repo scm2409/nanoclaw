@@ -39,6 +39,15 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
   };
 }
 
+/** Read the optional `--subagent-only` flag. Absent means false; anything but true/false is an error. */
+function parseSubagentOnly(args: Record<string, unknown>): boolean {
+  const raw = args['subagent-only'] ?? args.subagent_only;
+  if (raw === undefined) return false;
+  const value = String(raw);
+  if (!['true', 'false'].includes(value)) throw new Error('--subagent-only must be one of: true, false');
+  return value === 'true';
+}
+
 registerResource({
   name: 'group',
   plural: 'groups',
@@ -324,7 +333,8 @@ registerResource({
       access: 'approval',
       description:
         'Add an MCP server to a group. Requires `ncl groups restart` to take effect. ' +
-        'Use --id <group-id> --name <server-name> --command <cmd> [--args <json-array>] [--env <json-object>].',
+        'Use --id <group-id> --name <server-name> --command <cmd> [--args <json-array>] [--env <json-object>] ' +
+        '[--subagent-only true|false].',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -341,10 +351,44 @@ registerResource({
           command,
           args: args.args ? (JSON.parse(args.args as string) as string[]) : [],
           env: args.env ? (JSON.parse(args.env as string) as Record<string, string>) : {},
+          ...(parseSubagentOnly(args) ? { subagentOnly: true } : {}),
         };
         updateContainerConfigJson(id, 'mcp_servers', servers);
 
         return { added: name, servers };
+      },
+    },
+    'config set-mcp-server-scope': {
+      access: 'approval',
+      description:
+        "Withhold an MCP server from the agent's main thread (its tool schemas then cost nothing on " +
+        'ordinary turns; a subagent claims it back via `mcpServers:` in its .claude/agents/*.md frontmatter), ' +
+        'or hand it back. Requires `ncl groups restart` to take effect. ' +
+        'Use --id <group-id> --name <server-name> --subagent-only true|false.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const name = args.name as string;
+        if (!name) throw new Error('--name is required');
+        if (args['subagent-only'] === undefined && args.subagent_only === undefined) {
+          throw new Error('--subagent-only is required (true or false)');
+        }
+        const subagentOnly = parseSubagentOnly(args);
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const servers = JSON.parse(row.mcp_servers) as Record<string, McpServerConfig>;
+        const server = servers[name];
+        if (!server) throw new Error(`MCP server "${name}" not found`);
+
+        // Keep the entry otherwise untouched — its env block typically holds
+        // OneCLI wiring nobody should have to retype to flip one flag.
+        if (subagentOnly) server.subagentOnly = true;
+        else delete server.subagentOnly;
+        updateContainerConfigJson(id, 'mcp_servers', servers);
+
+        return { name, subagentOnly };
       },
     },
     'config remove-mcp-server': {

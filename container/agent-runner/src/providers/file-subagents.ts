@@ -22,10 +22,30 @@ export interface FileSubagentDefinition {
   prompt: string;
   model?: string;
   tools?: string[];
+  /**
+   * Names of MCP servers this subagent claims. Resolution to actual server
+   * configs happens in the provider, which is the only place holding the full
+   * server map. A server marked `subagentOnly` in container.json is withheld
+   * from the main thread and is reachable *only* through a claim like this.
+   */
+  mcpServers?: string[];
+  /** Skill names preloaded into the subagent's context (SDK `AgentDefinition.skills`). */
+  skills?: string[];
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 const FIELD_RE = /^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$/;
+
+/** Parse an inline `[a, b, c]` frontmatter list. Anything else yields undefined. */
+function parseList(raw: string | undefined): string[] | undefined {
+  if (!raw || !raw.startsWith('[') || !raw.endsWith(']')) return undefined;
+  const items = raw
+    .slice(1, -1)
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
 
 function parseAgentMarkdown(raw: string): FileSubagentDefinition | null {
   const match = FRONTMATTER_RE.exec(raw);
@@ -48,15 +68,14 @@ function parseAgentMarkdown(raw: string): FileSubagentDefinition | null {
   const def: FileSubagentDefinition = { description, prompt };
   if (fields.model) def.model = fields.model;
 
-  const toolsRaw = fields.tools;
-  if (toolsRaw && toolsRaw.startsWith('[') && toolsRaw.endsWith(']')) {
-    const tools = toolsRaw
-      .slice(1, -1)
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (tools.length > 0) def.tools = tools;
-  }
+  const tools = parseList(fields.tools);
+  if (tools) def.tools = tools;
+
+  const mcpServers = parseList(fields.mcpServers);
+  if (mcpServers) def.mcpServers = mcpServers;
+
+  const skills = parseList(fields.skills);
+  if (skills) def.skills = skills;
 
   return def;
 }

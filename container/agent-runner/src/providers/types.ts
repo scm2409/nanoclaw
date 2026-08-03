@@ -104,6 +104,12 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /**
+   * Withhold this server from the main thread. Its tool schemas then cost
+   * nothing on ordinary turns, and it is reachable only through a subagent
+   * that claims it by name in its `.claude/agents/*.md` frontmatter.
+   */
+  subagentOnly?: boolean;
 }
 
 export interface AgentQuery {

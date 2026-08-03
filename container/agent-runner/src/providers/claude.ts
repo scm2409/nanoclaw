@@ -12,7 +12,7 @@ import {
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { TIMEZONE, formatLocalStamp } from '../timezone.js';
-import { loadFileSubagents } from './file-subagents.js';
+import { loadFileSubagents, type FileSubagentDefinition } from './file-subagents.js';
 import { registerProvider } from './provider-registry.js';
 import type {
   AgentProvider,
@@ -130,6 +130,73 @@ const TOOL_ALLOWLIST = [
 // allowlist patterns match what the SDK actually exposes.
 function mcpAllowPattern(serverName: string): string {
   return `mcp__${serverName.replace(/[^a-zA-Z0-9_-]/g, '_')}__*`;
+}
+
+/**
+ * A file subagent with its MCP-server claims resolved: the frontmatter's list
+ * of server *names* becomes the SDK's list of one-entry server Records.
+ */
+type SdkAgentDefinition = Omit<FileSubagentDefinition, 'mcpServers'> & {
+  mcpServers?: Record<string, McpServerConfig>[];
+};
+
+/**
+ * Turn file subagents into SDK `AgentDefinition`s, resolving each subagent's
+ * MCP-server claims against the full server map.
+ *
+ * A server marked `subagentOnly` never reaches the main thread's `mcpServers`
+ * — that is the whole point, since an MCP server's tool schemas ride along on
+ * every API call of the thread that holds it (Nextcloud's 63 tools are ~39k
+ * tokens, ~60% of a turn, spent even when the turn never touches Nextcloud).
+ *
+ * Three things here are load-bearing, all verified against the real CLI by
+ * logging the `tools` array actually sent per thread:
+ *
+ *   - Withholding via top-level `disallowedTools` does not work. It does strip
+ *     the schemas from the main thread's request, but it strips them from the
+ *     subagent's request too, even when the subagent claims the server.
+ *   - The Record form (`[{ name: config }]`) is mandatory. A bare string
+ *     resolves against the on-disk MCP config rather than the servers we pass
+ *     programmatically, so it silently resolves to nothing.
+ *   - The server process is not spawned until the subagent is actually
+ *     invoked, so a withheld server costs nothing on turns that never use it.
+ *
+ * Caveat for the future: the CLI skips agent-frontmatter MCP servers entirely
+ * under `--strict-mcp-config`, safe/bare mode, remote mode, or an enterprise
+ * MCP config. NanoClaw sets none of those; if one is ever introduced, every
+ * `subagentOnly` server goes silently unreachable.
+ */
+function buildAgentDefinitions(
+  cwd: string,
+  mcpServers: Record<string, McpServerConfig>,
+): Record<string, SdkAgentDefinition> | undefined {
+  const fileSubagents = loadFileSubagents(cwd);
+  if (Object.keys(fileSubagents).length === 0) return undefined;
+
+  const claimed = new Set<string>();
+  const agents: Record<string, SdkAgentDefinition> = {};
+
+  for (const [name, def] of Object.entries(fileSubagents)) {
+    const resolved: Record<string, McpServerConfig>[] = [];
+    for (const serverName of def.mcpServers ?? []) {
+      const server = mcpServers[serverName];
+      if (!server) {
+        log(`Subagent "${name}" claims unknown MCP server "${serverName}" — ignoring the claim`);
+        continue;
+      }
+      claimed.add(serverName);
+      resolved.push({ [serverName]: server });
+    }
+    agents[name] = { ...def, mcpServers: resolved.length > 0 ? resolved : undefined };
+  }
+
+  for (const [serverName, server] of Object.entries(mcpServers)) {
+    if (server.subagentOnly && !claimed.has(serverName)) {
+      log(`MCP server "${serverName}" is subagentOnly but no subagent claims it — it is unreachable`);
+    }
+  }
+
+  return agents;
 }
 
 interface SDKUserMessage {
@@ -463,7 +530,10 @@ export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
 
   private assistantName?: string;
+  /** Every configured server, including the ones withheld from the main thread. */
   private mcpServers: Record<string, McpServerConfig>;
+  /** The subset the main thread actually carries — see `buildAgentDefinitions`. */
+  private topLevelMcpServers: Record<string, McpServerConfig>;
   private env: Record<string, string | undefined>;
   private additionalDirectories?: string[];
   private model?: string;
@@ -473,6 +543,9 @@ export class ClaudeProvider implements AgentProvider {
   constructor(options: ProviderOptions = {}) {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
+    this.topLevelMcpServers = Object.fromEntries(
+      Object.entries(this.mcpServers).filter(([, server]) => !server.subagentOnly),
+    );
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
     this.effort = options.effort;
@@ -540,7 +613,7 @@ export class ClaudeProvider implements AgentProvider {
     // file-subagents.ts) — only the programmatic `agents` option registers
     // one. Without this, every subagent file a group ships (e.g. a
     // websearch.md) is silently unusable via the Task tool.
-    const fileSubagents = loadFileSubagents(input.cwd);
+    const fileSubagents = buildAgentDefinitions(input.cwd, this.mcpServers);
 
     const sdkResult = sdkQuery({
       prompt: stream,
@@ -554,7 +627,7 @@ export class ClaudeProvider implements AgentProvider {
           : undefined,
         allowedTools: [...TOOL_ALLOWLIST, ...Object.keys(this.mcpServers).map(mcpAllowPattern)],
         disallowedTools: SDK_DISALLOWED_TOOLS,
-        agents: Object.keys(fileSubagents).length > 0 ? fileSubagents : undefined,
+        agents: fileSubagents,
         env: this.env,
         model: this.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -562,7 +635,7 @@ export class ClaudeProvider implements AgentProvider {
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user', 'local'],
-        mcpServers: this.mcpServers,
+        mcpServers: this.topLevelMcpServers,
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],
           PostToolUse: [{ hooks: [postToolUseHook] }],

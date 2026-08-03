@@ -141,4 +141,54 @@ Body two.
     fs.writeFileSync(path.join(dir, 'README.txt'), 'not an agent file');
     expect(loadFileSubagents(tmp)).toEqual({});
   });
+
+  // An MCP server withheld from the main agent (marked `subagentOnly` in
+  // container.json) is only reachable if some subagent claims it by name here.
+  // The claim is a list of server *names*; resolving them to configs is
+  // claude.ts's job, because only it holds the full server map.
+  it('parses the mcpServers claim and the skills preload list', () => {
+    writeAgentFile(
+      'nextcloud',
+      `---
+description: Runs Nextcloud operations.
+model: sonnet
+tools: [Read, Skill]
+mcpServers: [nextcloud]
+skills: [nextcloud-deck-workflow, nextcloud-deck-inbox]
+---
+
+Du bist ein Nextcloud-Ausführer.
+`,
+    );
+
+    const agents = loadFileSubagents(tmp);
+
+    expect(agents.nextcloud).toEqual({
+      description: 'Runs Nextcloud operations.',
+      model: 'sonnet',
+      tools: ['Read', 'Skill'],
+      mcpServers: ['nextcloud'],
+      skills: ['nextcloud-deck-workflow', 'nextcloud-deck-inbox'],
+      prompt: 'Du bist ein Nextcloud-Ausführer.',
+    });
+  });
+
+  it('leaves mcpServers and skills undefined when the lists are empty', () => {
+    writeAgentFile(
+      'blank-lists',
+      `---
+description: Declares empty lists.
+mcpServers: []
+skills: []
+---
+
+Body.
+`,
+    );
+
+    expect(loadFileSubagents(tmp)['blank-lists']).toEqual({
+      description: 'Declares empty lists.',
+      prompt: 'Body.',
+    });
+  });
 });

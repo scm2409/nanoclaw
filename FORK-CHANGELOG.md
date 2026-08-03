@@ -11,6 +11,55 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-03 — an MCP server can now be withheld from the main agent and handed to one subagent
+
+An MCP server's tool schemas ride along on every single API call of the thread
+that holds them. The Nextcloud server (`-e calendar -e deck -e webdav`) exposes
+63 tools; measured against the running image, they add 68,283 characters
+(~17k tokens) to the request — spent on every turn, including the ones that never
+mention Nextcloud. The `tools/list` response is 155,784 characters raw; the CLI
+drops the MCP-side extras, so 68k is what actually goes on the wire and the honest
+number to quote.
+
+The obvious route does not work, and it was worth proving before building
+anything. Withholding a server from the main thread with a top-level
+`disallowedTools: ['mcp__x__*']` does strip the schemas from the main thread's
+request — and strips them from the subagent's request too, even when the subagent
+claims the server. Verified by pointing the CLI at a fake Anthropic endpoint that
+logs the `tools` array actually sent per thread: main 30 → 24 tools, subagent
+27 → 21, zero `mcp__nc__*` in either.
+
+What does work is declaring the server *only* in `AgentDefinition.mcpServers`.
+Same harness: main thread 24 tools with none of the server's, subagent 84 with all
+63, and the subagent's tool call really executed. The server process is not spawned
+until the subagent is invoked, so a withheld server costs nothing on turns that
+never use it. Two details are load-bearing and easy to get wrong — the Record form
+is mandatory (a bare string resolves against the on-disk MCP config, not the
+servers passed programmatically, and silently resolves to nothing), and the CLI
+skips agent-frontmatter MCP servers entirely under `--strict-mcp-config`,
+safe/bare mode, remote mode, or an enterprise MCP config. NanoClaw sets none of
+those today; if one is ever introduced, every withheld server goes unreachable.
+
+The assignment is deliberately two-sided. `container.json` / `container_configs`
+marks a server `subagentOnly` — the withholding decision, DB-owned, set via the new
+`ncl groups config set-mcp-server-scope` (or `--subagent-only` on
+`config add-mcp-server`). A subagent claims it back by name through a new
+`mcpServers:` key in its `.claude/agents/*.md` frontmatter — the granting decision,
+tracked in git. `buildAgentDefinitions` in the claude provider resolves the claim
+against the full server map and logs both the unclaimed-server and the
+unknown-claim cases rather than failing silently. A new `skills:` frontmatter key
+preloads skills into the subagent, which is what lets a Deck executor carry the
+board conventions without the main agent restating them.
+
+A note on measurement, because the obvious instrument lies here: the per-message
+token notice cannot show this. Each chat in this install spawns a fresh container,
+and on a fresh container the SDK restores the session's cumulative usage, so the
+first (and only) reported turn is a restored total, not a turn cost — the readings
+climbed from 62k to 67k across the change and told us nothing. The request-payload
+measurement above is the real number.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-03 — the token notice was reporting the session total as if it were the message
 
 A one-word "pong" was announced as 1,425,827 tokens. The number was real, but it

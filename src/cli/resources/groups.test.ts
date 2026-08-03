@@ -305,6 +305,124 @@ describe('groups config update --log-subagents', () => {
   });
 });
 
+// An MCP server's tool schemas ride along on every API call of the thread that
+// holds it. Marking a server `subagentOnly` keeps it out of the agent's main
+// thread; a subagent claims it back by name in its `.claude/agents/*.md`
+// frontmatter. Flipping an existing entry needs its own verb — re-running
+// add-mcp-server would mean retyping the server's whole env block.
+describe('groups config MCP server scope (subagentOnly)', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  function servers(gid: string): Record<string, { subagentOnly?: boolean; env?: unknown }> {
+    return JSON.parse(getContainerConfig(gid)!.mcp_servers);
+  }
+
+  it('adds a server as subagent-only when asked', async () => {
+    const GID = 'ag-mcp-scope-add';
+    createAgentGroup({ id: GID, name: 's', folder: 's', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    const add = await dispatch(
+      {
+        id: 'r1',
+        command: 'groups-config-add-mcp-server',
+        args: { id: GID, name: 'nextcloud', command: 'nextcloud-mcp-server', 'subagent-only': 'true' },
+      },
+      { caller: 'host' },
+    );
+    expect(add.ok).toBe(true);
+    expect(servers(GID).nextcloud!.subagentOnly).toBe(true);
+  });
+
+  it('omits the flag entirely when the server is added without it', async () => {
+    const GID = 'ag-mcp-scope-default';
+    createAgentGroup({ id: GID, name: 's', folder: 's', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    await dispatch(
+      { id: 'r1', command: 'groups-config-add-mcp-server', args: { id: GID, name: 'plain', command: 'x' } },
+      { caller: 'host' },
+    );
+    expect(servers(GID).plain).not.toHaveProperty('subagentOnly');
+  });
+
+  it('flips an existing server in place, preserving its env, and clears the flag again', async () => {
+    const GID = 'ag-mcp-scope-flip';
+    createAgentGroup({ id: GID, name: 's', folder: 's', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    await dispatch(
+      {
+        id: 'r1',
+        command: 'groups-config-add-mcp-server',
+        args: { id: GID, name: 'nextcloud', command: 'nextcloud-mcp-server', env: '{"HOST":"h"}' },
+      },
+      { caller: 'host' },
+    );
+
+    const on = await dispatch(
+      {
+        id: 'r2',
+        command: 'groups-config-set-mcp-server-scope',
+        args: { id: GID, name: 'nextcloud', 'subagent-only': 'true' },
+      },
+      { caller: 'host' },
+    );
+    expect(on.ok).toBe(true);
+    expect(servers(GID).nextcloud!.subagentOnly).toBe(true);
+    expect(servers(GID).nextcloud!.env).toEqual({ HOST: 'h' });
+
+    const off = await dispatch(
+      {
+        id: 'r3',
+        command: 'groups-config-set-mcp-server-scope',
+        args: { id: GID, name: 'nextcloud', 'subagent-only': 'false' },
+      },
+      { caller: 'host' },
+    );
+    expect(off.ok).toBe(true);
+    expect(servers(GID).nextcloud).not.toHaveProperty('subagentOnly');
+  });
+
+  it('rejects an unknown server name and a non-boolean value', async () => {
+    const GID = 'ag-mcp-scope-bad';
+    createAgentGroup({ id: GID, name: 's', folder: 's', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+    await dispatch(
+      { id: 'r1', command: 'groups-config-add-mcp-server', args: { id: GID, name: 'known', command: 'x' } },
+      { caller: 'host' },
+    );
+
+    const missing = await dispatch(
+      {
+        id: 'r2',
+        command: 'groups-config-set-mcp-server-scope',
+        args: { id: GID, name: 'nope', 'subagent-only': 'true' },
+      },
+      { caller: 'host' },
+    );
+    expect(missing.ok).toBe(false);
+
+    const bad = await dispatch(
+      {
+        id: 'r3',
+        command: 'groups-config-set-mcp-server-scope',
+        args: { id: GID, name: 'known', 'subagent-only': 'yes' },
+      },
+      { caller: 'host' },
+    );
+    expect(bad.ok).toBe(false);
+  });
+});
+
 describe('groups config update --show-token-usage', () => {
   beforeEach(() => {
     if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
