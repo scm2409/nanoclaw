@@ -26,6 +26,10 @@ groups/*/*
 groups/*/.claude/*
 !groups/*/.claude/agents/
 
+# Runtime lock written by the scheduled-tasks hook. It was tracked once by
+# accident and then showed up as a pending deletion in every session.
+.claude/scheduled_tasks.lock
+
 # Composer-managed CLAUDE.md artifacts (regenerated every spawn) and
 # per-group memory (CLAUDE.local.md) must never be committed.
 **/CLAUDE.local.md

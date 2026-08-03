@@ -21,9 +21,13 @@ This is a vibecoded fork. Any fork-local change made in a session must be descri
 [docs/fork-changelog.md](docs/fork-changelog.md). If the change also alters something
 described in `groups/main-agent/nanoclaw-overview.md` (KaiL01's own self-description —
 channels, subagents, Nextcloud scope, open items), update that file too, in the same
-session. Note: this file is gitignored (local per-install, like
-`CONFIG-CHANGELOG.md` below) since it names real host/domain specifics — the
-convention still applies, it just never shows up in a diff or PR.
+session.
+
+`FORK-CHANGELOG.md` is tracked and gets committed with the change it describes.
+`nanoclaw-overview.md` is **not** — it names real host and domain specifics, so it is
+gitignored and stays local per-install (like `CONFIG-CHANGELOG.md` below). The
+convention applies to it all the same; it just never shows up in a diff or PR, which
+is exactly why it is easy to forget.
 
 ## Config Changelog (operational, no code)
 

@@ -11,6 +11,21 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-03 — the fork-changelog note in CLAUDE.md said the opposite of the truth
+
+`CLAUDE.md` claimed "this file is gitignored … it just never shows up in a diff or PR"
+right after naming both `FORK-CHANGELOG.md` and `nanoclaw-overview.md`, so which file
+it meant was ambiguous — and on the plain reading it was wrong: `FORK-CHANGELOG.md` is
+tracked and ships with the commit it describes. Only `nanoclaw-overview.md` is
+gitignored, because it names real host and domain specifics. Both are now stated
+separately.
+
+Also: `.claude/scheduled_tasks.lock`, a runtime lock, had been committed once by
+accident, so every session opened with a phantom pending deletion in `git status`. It
+is untracked now and ignored going forward.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-02 — calendar invitations by mail, and the two adapter changes that make them arrive as invitations
 
 The agent has a Nextcloud calendar of its own but no write access to the operator's, so
