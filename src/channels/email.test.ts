@@ -158,6 +158,45 @@ describe('email adapter — deliver', () => {
     expect(mail.subject).toBe('Message from KaiL01');
     expect(mail.inReplyTo).toBeUndefined();
   });
+
+  it('uses a subject the agent set, verbatim', async () => {
+    const { adapter, sendMail } = makeAdapter({});
+    await adapter.deliver('email:freund@example.org', null, {
+      kind: 'chat',
+      content: { text: 'Anbei die Einladung.', subject: 'Einladung: Zahnarzt' },
+    });
+    expect(sendMail.mock.calls[0][0].subject).toBe('Einladung: Zahnarzt');
+  });
+
+  // A subject of its own and In-Reply-To onto an unrelated old mail is the
+  // worst of both: the client files the new topic into the old conversation
+  // and hides the subject the agent chose. Setting a subject starts a thread.
+  it('drops the reply headers when the agent set a subject', async () => {
+    const { adapter, sendMail } = makeAdapter({
+      threadRef: { messageId: '<abc@example.org>', subject: 'Angebot' },
+    });
+    await adapter.deliver('email:freund@example.org', null, {
+      kind: 'chat',
+      content: { text: 'Anbei die Einladung.', subject: 'Einladung: Zahnarzt' },
+    });
+    const mail = sendMail.mock.calls[0][0];
+    expect(mail.subject).toBe('Einladung: Zahnarzt');
+    expect(mail.inReplyTo).toBeUndefined();
+    expect(mail.references).toBeUndefined();
+  });
+
+  it('ignores a blank subject and threads as before', async () => {
+    const { adapter, sendMail } = makeAdapter({
+      threadRef: { messageId: '<abc@example.org>', subject: 'Angebot' },
+    });
+    await adapter.deliver('email:freund@example.org', null, {
+      kind: 'chat',
+      content: { text: 'Ja', subject: '   ' },
+    });
+    const mail = sendMail.mock.calls[0][0];
+    expect(mail.subject).toBe('Re: Angebot');
+    expect(mail.inReplyTo).toBe('<abc@example.org>');
+  });
 });
 
 describe('handleIncomingMail', () => {

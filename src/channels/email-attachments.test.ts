@@ -76,6 +76,42 @@ describe('checkOutboundAttachments', () => {
   it('accepts a total exactly on the limit', () => {
     expect(checkOutboundAttachments([file('a.bin', 750), file('b.bin', 750)], LIMITS)).toHaveLength(2);
   });
+
+  // A calendar invitation and a calendar export are the same media type and the
+  // same extension; only the METHOD property tells them apart. Clients decide
+  // whether to show an RSVP prompt from the Content-Type parameter, not from the
+  // body — so the parameter has to be lifted out of the file itself.
+  describe('calendar parts', () => {
+    function ics(lines: string[]) {
+      return { filename: 'invite.ics', data: Buffer.from(lines.join('\r\n'), 'utf8') };
+    }
+
+    it('lifts METHOD out of an invitation into the content type', () => {
+      const out = checkOutboundAttachments(
+        [ics(['BEGIN:VCALENDAR', 'VERSION:2.0', 'METHOD:REQUEST', 'END:VCALENDAR'])],
+        LIMITS,
+      );
+      expect(out[0].contentType).toBe('text/calendar; charset=UTF-8; method=REQUEST');
+    });
+
+    it('leaves a calendar without a METHOD alone', () => {
+      const out = checkOutboundAttachments([ics(['BEGIN:VCALENDAR', 'VERSION:2.0', 'END:VCALENDAR'])], LIMITS);
+      expect(out[0].contentType).toBe('text/calendar');
+    });
+
+    it('ignores a METHOD that is not a bare token', () => {
+      const out = checkOutboundAttachments(
+        [ics(['BEGIN:VCALENDAR', 'DESCRIPTION:METHOD:REQUEST steht hier nur im Text', 'END:VCALENDAR'])],
+        LIMITS,
+      );
+      expect(out[0].contentType).toBe('text/calendar');
+    });
+
+    it('does not scan non-calendar files for METHOD', () => {
+      const out = checkOutboundAttachments([{ filename: 'notes.txt', data: Buffer.from('METHOD:REQUEST') }], LIMITS);
+      expect(out[0].contentType).toBe('text/plain');
+    });
+  });
 });
 
 describe('buildInboundAttachments', () => {

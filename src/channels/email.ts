@@ -239,6 +239,19 @@ function extractText(content: unknown): string {
   return '';
 }
 
+/**
+ * The subject the agent chose, if any. Absent for every message that is not
+ * deliberately starting a new topic — see the deliver() call site for why that
+ * distinction also decides the threading headers.
+ */
+function extractSubject(content: unknown): string | undefined {
+  if (!content || typeof content !== 'object') return undefined;
+  const raw = (content as Record<string, unknown>).subject;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 function replySubject(ref: ThreadRef | undefined, fromName: string): string {
   if (!ref || !ref.subject) return `Message from ${fromName}`;
   return /^re:\s/i.test(ref.subject) ? ref.subject : `Re: ${ref.subject}`;
@@ -557,13 +570,18 @@ export function createEmailAdapter(config: EmailAdapterConfig, deps: EmailAdapte
       const attachments = checkOutboundAttachments(message.files, config.limits);
 
       const ref = getThreadRef(to);
+      const subject = extractSubject(message.content);
       const mail: Record<string, unknown> = {
         from: fromHeader,
         to,
-        subject: replySubject(ref, fromName),
+        subject: subject ?? replySubject(ref, fromName),
         text: extractText(message.content),
       };
-      if (ref) {
+      // Setting a subject means starting a topic, so the reply headers go with
+      // it. Keeping them would file the new subject into whatever unrelated
+      // conversation the correspondent last wrote in — the client threads on
+      // In-Reply-To and hides the subject the agent chose.
+      if (ref && !subject) {
         mail.inReplyTo = ref.messageId;
         mail.references = ref.messageId;
       }

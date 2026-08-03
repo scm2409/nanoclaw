@@ -4,7 +4,11 @@ The runtime system prompt lists your destinations and explains how final output 
 
 ### Sending files (`send_file`)
 
-Use `mcp__nanoclaw__send_file({ to, path, text?, filename? })` to deliver a file from your workspace. `path` is absolute or relative to `/workspace/agent/`; `filename` overrides the display name shown in chat (defaults to the file's basename); `text` is an optional accompanying message. Use this for artifacts you produce (charts, PDFs, generated images, reports) rather than dumping contents into chat.
+Use `mcp__nanoclaw__send_file({ to, path, text?, filename?, subject? })` to deliver a file from your workspace. `path` is absolute or relative to `/workspace/agent/`; `filename` overrides the display name shown in chat (defaults to the file's basename); `text` is an optional accompanying message. Use this for artifacts you produce (charts, PDFs, generated images, reports) rather than dumping contents into chat.
+
+### Subject lines (`subject`)
+
+`send_message` and `send_file` both take an optional `subject`. It only means something on channels that have subject lines (email) and is ignored elsewhere. Setting it **starts a new thread** instead of replying to the correspondent's last mail — so use it when the message opens a topic of its own (an invitation, a report, a fresh request), and leave it off when you are answering something.
 
 ### Reacting to messages (`add_reaction`)
 

@@ -305,6 +305,50 @@ describe('email channel against a real IMAP/SMTP server', () => {
     expect(mail.attachments[0].content.toString()).toBe('kurzer bericht');
   });
 
+  // The end of the calendar-invite path: an .ics has to leave the process as a
+  // real invitation, not as a file the client offers to download. That hinges
+  // on the Content-Type parameter, which is derived from the file's own METHOD
+  // property — and on the agent-set subject, since an invitation threaded onto
+  // an unrelated conversation is the thing a recipient never finds again.
+  it('sends a calendar invitation the client can recognise', async () => {
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'METHOD:REQUEST',
+      'BEGIN:VEVENT',
+      'UID:live-test-1',
+      'SUMMARY:Zahnarzt',
+      'END:VEVENT',
+      'END:VCALENDAR',
+      '',
+    ].join('\r\n');
+
+    await adapter.deliver(`email:${FRIEND}`, null, {
+      kind: 'chat',
+      content: { text: 'Anbei die Einladung.', subject: 'Einladung: Zahnarzt' },
+      files: [{ filename: 'invite.ics', data: Buffer.from(ics, 'utf8') }],
+    });
+
+    const mail = await waitFor(
+      async () => (await readMailbox(FRIEND)).find((m) => m.subject === 'Einladung: Zahnarzt'),
+      'the invitation mail',
+    );
+
+    // Verbatim subject, and no reply headers even though this correspondent
+    // has an open thread from the tests above.
+    expect(mail.subject).toBe('Einladung: Zahnarzt');
+    expect(mail.inReplyTo).toBeFalsy();
+    expect(mail.attachments).toHaveLength(1);
+    const part = mail.attachments[0];
+    expect(part.filename).toBe('invite.ics');
+    expect(part.contentType).toBe('text/calendar');
+    // The parameter is what makes a client offer Accept/Decline instead of a
+    // download — mailparser keeps it on the part's own headers.
+    const partHeader = part.headers.get('content-type') as { params?: Record<string, string> };
+    expect(partHeader.params?.method).toBe('REQUEST');
+    expect(part.content.toString()).toContain('METHOD:REQUEST');
+  });
+
   it('refuses to send to an address that is not on the allowlist', async () => {
     await expect(
       adapter.deliver(`email:${STRANGER}`, null, { kind: 'chat', content: { text: 'darf nicht raus' } }),

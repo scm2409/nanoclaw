@@ -38,10 +38,17 @@ Email clients render plain text. They do not render Markdown.
 
 ## Replies and subjects
 
-Replies are threaded automatically onto the last mail from that correspondent,
-and the subject becomes `Re: <their subject>`. You do not set the subject
-yourself. If you are starting a genuinely new topic, say so in the first line
-of the body, because the subject will still say `Re:` on the old one.
+By default, replies are threaded automatically onto the last mail from that
+correspondent and the subject becomes `Re: <their subject>`. Leave it that way
+whenever you are answering something — that is the common case.
+
+When the message opens a topic of its own (an invitation, a report, a request
+that has nothing to do with the last exchange), pass `subject` to
+`send_message` or `send_file`. It is used verbatim **and starts a new thread**:
+the reply headers are dropped, so the mail no longer hangs off an unrelated
+conversation. Write it like a mail subject — short, specific, no `Re:`, and
+recognisable in a list months later (`Einladung: Zahnarzt, Mi 5.8. 14:00`, not
+`Termin`).
 
 Don't quote the mail you're answering. The recipient has it.
 

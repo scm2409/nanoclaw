@@ -38,6 +38,22 @@ function destinationList(): string {
   return all.map((d) => d.name).join(', ');
 }
 
+const SUBJECT_DESCRIPTION =
+  'Optional subject line, for destinations that have one (email). Setting it starts a new ' +
+  'thread instead of replying to the last message — use it only when the message opens a topic ' +
+  'of its own. Ignored by channels without subjects.';
+
+/**
+ * Carry an optional subject alongside the message body.
+ *
+ * Channels that have no notion of a subject read named fields off the content
+ * object and ignore the rest, so this is safe to attach unconditionally.
+ */
+function withSubject<T extends Record<string, unknown>>(content: T, subject: unknown): T {
+  if (typeof subject !== 'string' || subject.trim() === '') return content;
+  return { ...content, subject: subject.trim() };
+}
+
 /**
  * Resolve a destination name to routing fields.
  *
@@ -79,6 +95,7 @@ export const sendMessage: McpToolDefinition = {
           description: 'Destination name (e.g., "family", "worker-1").',
         },
         text: { type: 'string', description: 'Message content' },
+        subject: { type: 'string', description: SUBJECT_DESCRIPTION },
       },
       required: ['to', 'text'],
     },
@@ -100,7 +117,7 @@ export const sendMessage: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text }),
+      content: JSON.stringify(withSubject({ text }, args.subject)),
     });
 
     log(`send_message: #${seq} → ${routing.resolvedName}`);
@@ -119,6 +136,7 @@ export const sendFile: McpToolDefinition = {
         path: { type: 'string', description: 'File path (relative to /workspace/agent/ or absolute)' },
         text: { type: 'string', description: 'Optional accompanying message' },
         filename: { type: 'string', description: 'Display name (default: basename of path)' },
+        subject: { type: 'string', description: SUBJECT_DESCRIPTION },
       },
       required: ['to', 'path'],
     },
@@ -149,7 +167,7 @@ export const sendFile: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text: (args.text as string) || '', files: [filename] }),
+      content: JSON.stringify(withSubject({ text: (args.text as string) || '', files: [filename] }, args.subject)),
     });
 
     log(`send_file: ${id} → ${routing.resolvedName} (${filename})`);

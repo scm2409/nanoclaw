@@ -91,6 +91,23 @@ function mimeForFilename(filename: string): string {
   return MIME_BY_EXTENSION[ext] ?? 'application/octet-stream';
 }
 
+/** How far into a calendar file we look for the METHOD property. */
+const ICS_METHOD_SCAN_BYTES = 2048;
+
+/**
+ * A calendar invitation and a calendar export share both the extension and the
+ * media type — only the METHOD property separates them, and mail clients read
+ * it from the Content-Type parameter, not from the body. So for text/calendar
+ * the parameter is lifted out of the file itself: no new field has to be
+ * threaded from the container just to say "this one is an invitation".
+ */
+function calendarContentType(content: Buffer): string {
+  const head = content.subarray(0, ICS_METHOD_SCAN_BYTES).toString('utf8');
+  const match = /^METHOD:([A-Za-z-]+)\s*$/m.exec(head);
+  if (!match) return 'text/calendar';
+  return `text/calendar; charset=UTF-8; method=${match[1].toUpperCase()}`;
+}
+
 function extensionForMime(mimeType: string | undefined): string {
   if (!mimeType) return 'bin';
   return EXTENSION_BY_MIME[mimeType.split(';')[0].trim().toLowerCase()] ?? 'bin';
@@ -126,11 +143,14 @@ export function checkOutboundAttachments(files: OutboundFile[] | undefined, limi
     );
   }
 
-  return files.map((file) => ({
-    filename: file.filename,
-    content: file.data,
-    contentType: mimeForFilename(file.filename),
-  }));
+  return files.map((file) => {
+    const mime = mimeForFilename(file.filename);
+    return {
+      filename: file.filename,
+      content: file.data,
+      contentType: mime === 'text/calendar' ? calendarContentType(file.data) : mime,
+    };
+  });
 }
 
 /**

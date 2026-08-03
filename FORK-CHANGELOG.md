@@ -11,6 +11,62 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-02 — calendar invitations by mail, and the two adapter changes that make them arrive as invitations
+
+The agent has a Nextcloud calendar of its own but no write access to the operator's, so
+"make me an appointment" had no path at all. It now has one that keeps the human in the
+loop by construction: it mails a real iMIP invitation, and *accepting* it in the mail
+client is what creates the event. Nothing lands in a calendar without a deliberate act.
+
+The new container skill `calendar-invite` is a `SKILL.md` plus `make-ics.ts` — the first
+container skill in this fork that ships executable code rather than only instructions.
+The script is single-file and stdlib-only (`node:` imports, no `Bun.*`), so the same file
+runs under Bun in the read-only skill mount and under Node in the host test suite; no
+image rebuild, no dependency, nothing written next to itself. The generated `.ics` goes
+to `/tmp`, not the workspace: it only has to live until `send_file` copies it into the
+outbox, and a persistent location would collect one dead file per appointment forever.
+Only the organizer address, which must survive, is written to the workspace. It exists because the
+properties that decide whether a client accepts an `.ics` at all — CRLF endings, 75-octet
+line folding on character boundaries, TEXT escaping, an exclusive `DTEND` for all-day
+events, wall-clock times converted through the right DST offset — are invisible in
+anything a reviewer can read back. A hand-written invitation looks correct and silently
+fails to import; there was already one in the workspace from an earlier improvised
+attempt. Scope is deliberately just creation: updating and cancelling would need a UID
+journal, and recurrence needs `TZID` plus a `VTIMEZONE` block, since `RRULE` over UTC
+stamps drifts by an hour past a daylight-saving change. Reminders are supported
+(`--reminder 15m`, `1d`, repeatable) as `VALARM` blocks, with the caveat written into the
+skill: they are a request, since a receiving client may substitute its own defaults on
+accept — but an invitation carrying no alarm can never produce one, so the block still
+has to be correct.
+
+Two things on the email path had to change for the file to arrive as an invitation rather
+than as a download.
+
+First, the attachment's Content-Type. An invitation and a calendar export share both the
+extension and the media type; only the `METHOD` property separates them, and clients read
+it from the Content-Type parameter, not from the body. Rather than thread a new field
+through the container-to-host protocol just to say "this one is an invitation",
+`checkOutboundAttachments` now reads it out of the file — for `text/calendar` it scans the
+first 2 KB for a `METHOD:` line and emits `text/calendar; charset=UTF-8; method=REQUEST`.
+A calendar without one is untouched.
+
+Second, the subject. It was always host-generated (`Message from <name>`, or `Re: <last
+subject>` when a thread ref existed), which for an invitation meant a generic subject
+*and* `In-Reply-To` pointing at whatever unrelated mail the correspondent last sent —
+filed into the wrong conversation and unfindable later. `send_message` and `send_file`
+now take an optional `subject`, carried in the content JSON that channels without
+subjects already ignore. The rule at the adapter is that setting a subject means starting
+a topic: the subject is used verbatim and the reply headers are dropped. Omitting it
+leaves the previous behaviour exactly as it was.
+
+Verified end to end, not just in unit tests: the GreenMail live suite gained a case
+asserting the `method=REQUEST` parameter and the verbatim subject survive a real SMTP/IMAP
+round trip, and a real invitation was sent through the running install and inspected on
+the wire. `vitest.config.ts` grew a `container/skills/**/*.test.ts` glob so a script
+shipped with a container skill is covered by `pnpm test` at all.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-02 — duplicate replies: a final-text block that only echoes a tool send is dropped
 
 Matrix answers started arriving twice. The cause was not Matrix, not the network and

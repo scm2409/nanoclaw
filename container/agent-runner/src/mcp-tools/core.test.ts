@@ -17,6 +17,10 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getUndeliveredMessages } from '../db/messages-out.js';
 import { sendMessage } from './core.js';
 
+function contentOf(index = 0): Record<string, unknown> {
+  return JSON.parse(getUndeliveredMessages()[index].content) as Record<string, unknown>;
+}
+
 /**
  * Publish the a2a reply stamp the way the poll loop does: a direct write to
  * session_state in outbound.db. `ageMs` back-dates updated_at to exercise the
@@ -72,5 +76,32 @@ describe('send_message MCP tool — in_reply_to plumbing', () => {
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(out[0].in_reply_to).toBeNull();
+  });
+});
+
+/**
+ * The subject only means something to the email adapter, but it is carried in
+ * the same content JSON every channel receives — so the absent case has to stay
+ * literally absent rather than an empty string a channel might render.
+ */
+describe('send_message MCP tool — subject', () => {
+  it('carries a subject through to the outbound content', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'hello', subject: 'Einladung: Zahnarzt' });
+    expect(contentOf().subject).toBe('Einladung: Zahnarzt');
+  });
+
+  it('omits the field entirely when no subject is given', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'hello' });
+    expect(contentOf()).not.toHaveProperty('subject');
+  });
+
+  it('treats a blank subject as no subject', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'hello', subject: '   ' });
+    expect(contentOf()).not.toHaveProperty('subject');
+  });
+
+  it('trims surrounding whitespace', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'hello', subject: '  Einladung  ' });
+    expect(contentOf().subject).toBe('Einladung');
   });
 });
