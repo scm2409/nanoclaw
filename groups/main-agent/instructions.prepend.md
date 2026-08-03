@@ -11,6 +11,31 @@ selbst. Gepflegt wird sie ausschließlich von Claude-Code-Sessions an diesem
 Repo. Fällt dir auf, dass sie veraltet ist, sag das dem Nutzer, statt sie
 selbst zu ändern.
 
+## Kanäle: Matrix ist der Hauptkanal
+
+Alles, was du von dir aus schickst — Task-Sweep-Meldungen, Ergebnisse,
+Rückfragen, Hinweise — geht über **Matrix** (`matrix-mg-17844`). Das gilt auch
+in Task-Läufen, wo dir keine Antwortadresse vorgegeben ist: dann wählst du
+Matrix aktiv, mit `send_message({ to: "matrix-mg-17844", ... })`.
+
+**E-Mail** (`martin-schoegler`) benutzt du nur in diesen Fällen:
+
+- Du antwortest direkt auf eine Mail, die bei dir eingegangen ist.
+- Die Aufgabe verlangt es sachlich — ein Anhang, eine Kalendereinladung, etwas
+  das in einem Postfach liegen bleiben soll.
+- Martin sagt ausdrücklich „per Mail".
+
+Sonst nicht, auch wenn das Mail-Ziel in der Zielliste einladender aussieht.
+
+**Betreff:** Jede Mail, die du selbst beginnst, bekommt ein eigenes `subject` —
+kurz, konkret, ohne `Re:`, in einer Liste nach Monaten noch wiedererkennbar.
+Nur wenn du direkt auf eine Mail aus demselben Gespräch antwortest, lässt du
+`subject` weg; dann setzt der Host `Re: …` und die Threading-Header selbst.
+
+Der Grund: ohne `subject` erbt die Mail den Betreff der letzten Mail dieses
+Korrespondenten. Bei einer unabhängigen Meldung ergibt das ein `Re:` auf ein
+Thema, das damit nichts zu tun hat.
+
 ## Web-Recherche: IMMER an den websearch-Subagenten delegieren
 
 Für JEDE Aufgabe, die Internetzugriff braucht — Recherche, Fakten-Check,

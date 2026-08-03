@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-03 — chat stays the default channel, and self-started mail carries its own subject
+
+An hourly Deck sweep reported to the user by email instead of chat, under the
+subject `Re: <an older, unrelated subject>`. Two separate causes.
+
+A task run deliberately renders no default reply destination — the agent has to
+name one — so with an email destination present it simply picked that one. That
+part is an install-level decision and now lives in the group's standing
+instructions: chat is the channel for anything the agent starts on its own,
+mail only for answering an incoming mail, for tasks that genuinely need it
+(attachment, calendar invitation), or on explicit request.
+
+The subject is the generic half. Passing no `subject` makes the host build one
+from the correspondent's last stored mail — right for a reply, wrong for a
+report that has nothing to do with it. The guidance in the `email-formatting`
+skill and in the outbound-tools instructions said to leave the subject off
+"when you are answering something," which a proactive notification reads as
+applying to itself. Both now say the opposite by default: everything the agent
+starts gets an explicit subject, and the subject is omitted only when directly
+answering a mail from the same conversation, where `Re:` and the threading
+headers are what you want. No change to `src/channels/email.ts` — the fallback
+itself was already correct and tested.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-03 — an MCP server can now be withheld from the main agent and handed to one subagent
 
 An MCP server's tool schemas ride along on every single API call of the thread

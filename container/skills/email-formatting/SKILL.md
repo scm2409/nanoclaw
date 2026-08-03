@@ -40,15 +40,21 @@ Email clients render plain text. They do not render Markdown.
 
 By default, replies are threaded automatically onto the last mail from that
 correspondent and the subject becomes `Re: <their subject>`. Leave it that way
-whenever you are answering something — that is the common case.
+in exactly one case: you are directly answering a mail that arrived in this
+conversation.
 
-When the message opens a topic of its own (an invitation, a report, a request
-that has nothing to do with the last exchange), pass `subject` to
-`send_message` or `send_file`. It is used verbatim **and starts a new thread**:
-the reply headers are dropped, so the mail no longer hangs off an unrelated
-conversation. Write it like a mail subject — short, specific, no `Re:`, and
-recognisable in a list months later (`Einladung: Zahnarzt, Mi 5.8. 14:00`, not
-`Termin`).
+Everything you start yourself — a task-run notification, a report, an
+invitation, a reminder, anything the recipient did not just write to you about
+— needs an explicit `subject` passed to `send_message` or `send_file`. It is
+used verbatim **and starts a new thread**: the reply headers are dropped, so
+the mail no longer hangs off an unrelated conversation. Write it like a mail
+subject — short, specific, no `Re:`, and recognisable in a list months later
+(`Einladung: Zahnarzt, Mi 5.8. 14:00`, not `Termin`).
+
+Getting this wrong is not cosmetic. The default subject comes from whatever
+that correspondent last mailed you, which may be weeks old and about something
+else entirely — your report then arrives as `Re: <their unrelated subject>`,
+buried in that old thread.
 
 Don't quote the mail you're answering. The recipient has it.
 

@@ -8,7 +8,7 @@ Use `mcp__nanoclaw__send_file({ to, path, text?, filename?, subject? })` to deli
 
 ### Subject lines (`subject`)
 
-`send_message` and `send_file` both take an optional `subject`. It only means something on channels that have subject lines (email) and is ignored elsewhere. Setting it **starts a new thread** instead of replying to the correspondent's last mail — so use it when the message opens a topic of its own (an invitation, a report, a fresh request), and leave it off when you are answering something.
+`send_message` and `send_file` both take an optional `subject`. It only means something on channels that have subject lines (email) and is ignored elsewhere. Setting it **starts a new thread** instead of replying to the correspondent's last mail — so use it for anything you start yourself (an invitation, a report, a task-run notification, a fresh request), and leave it off only when you are directly answering a mail that arrived in this conversation. Otherwise the subject is inherited from that correspondent's last mail, which may be old and unrelated.
 
 ### Reacting to messages (`add_reaction`)
 
