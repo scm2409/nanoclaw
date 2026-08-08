@@ -11,6 +11,45 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-08 — fixed the real cause of duplicate Matrix replies (turn-boundary reset, not a Matrix bug)
+
+KaiL01 sent the same Matrix reply twice again, despite the 2026-08-02 fix
+(`f70bec82`) for exactly this symptom. This time the cause was tracked all the
+way through with log evidence — host logs, `outbound.db`, and live
+`docker logs` from the still-running container — rather than inferred, per the
+user's explicit request for a verified root cause instead of another guess.
+
+The earlier fix's mechanism (suppress a final `<message>` block that echoes an
+earlier `send_message` tool call in the same turn, via
+`container/agent-runner/src/turn-sends.ts`) is sound and did not need
+reverting — it correctly suppressed three earlier echoes in this very
+incident. The gap was narrower: `poll-loop.ts` called `markTurnStart()`
+unconditionally after every `'result'` event, including a same-turn re-wrap
+retry (triggered when the model's final text is missing its closing
+`</message>` tag and gets nudged to resend). That reset the echo-suppression
+window mid-turn, so when the model complied with the nudge and resent the
+exact text it had already sent via the tool moments earlier, the retry was no
+longer recognized as an echo and got delivered as a genuine second message
+(outbound seq 941 and 947 in the incident, byte-identical text, 7.8s apart).
+
+Fix: `markTurnStart()` now only fires where a genuinely new pending message
+gets pushed into an active query (the follow-up poller in `processQuery`,
+where `unwrappedNudged`/`taskBlockNudged` already reset for the same reason),
+not after every `'result'` event. A same-turn retry — wrapping or task-block —
+keeps seeing the turn's own earlier tool sends and dedupes against them as
+before. New regression test in `poll-loop.test.ts` reproduces the exact
+incident shape (tool send → malformed result → nudge → compliant retry) and
+fails without the fix.
+
+A second, unrelated bug turned up during the investigation and was left
+unfixed by the user's choice: `current_in_reply_to` (set once per outer
+poll-loop iteration) goes stale across a long-lived stream with multiple
+pushed follow-ups, so a tool-based send made after a later push threads
+against an older inbound message instead of the one that triggered it. Not a
+duplicate-delivery cause, just wrong reply-to metadata — worth a follow-up.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-03 — chat stays the default channel, and self-started mail carries its own subject
 
 An hourly Deck sweep reported to the user by email instead of chat, under the

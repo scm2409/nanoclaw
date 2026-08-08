@@ -6,6 +6,7 @@ import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
 import { isCorruptionError, processQuery, resetTokenUsageBaseline } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
+import { sendMessage } from './mcp-tools/core.js';
 import type { AgentQuery, ProviderEvent } from './providers/types.js';
 
 beforeEach(() => {
@@ -499,6 +500,70 @@ describe('error result with no <message> envelope', () => {
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toBe(spendCapText);
     expect(abortCalls).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('duplicate delivery across a same-turn re-wrap retry', () => {
+  it('does not re-deliver a tool-sent reply after a malformed result triggers a re-wrap nudge', async () => {
+    // Reproduces the 2026-08-08 10:12 Matrix incident: the agent sends via
+    // the send_message tool mid-turn, then the model's own final text for
+    // that same turn comes back truncated (no closing </message> tag) —
+    // dispatchResultText can't match it, so hasUnwrapped=true and the loop
+    // nudges the model to re-wrap. The model complies and resends the exact
+    // same text, properly wrapped this time. Because a 'result' event fired
+    // in between (the malformed one), markTurnStart() must NOT have reset
+    // the echo-suppression window, or this retry gets delivered as a real
+    // second message — which is exactly what happened live (outbound seq
+    // 941 and 947, byte-identical text).
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES ('matrix-mg-17844', 'matrix-mg-17844', 'channel', 'matrix', 'matrix:@scm2409:matrix.org', NULL)`,
+      )
+      .run();
+
+    const replyText =
+      'Erster Check: `docker` ist in meinem Container gar nicht installiert (command not found).';
+
+    const pushes: string[] = [];
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 'sess-1' };
+      // The tool call happens mid-turn — i.e. after processQuery's own
+      // initial markTurnStart(), same as in the live incident (the tool
+      // send landed well after the turn began, not before it).
+      await sendMessage.handler({ to: 'matrix-mg-17844', text: replyText });
+      // Malformed: missing closing </message> tag, so dispatchResultText's
+      // regex never matches — nothing is delivered, hasUnwrapped=true.
+      yield { type: 'result', text: `<message to="matrix-mg-17844">${replyText}` };
+      // Retry after the nudge: same text, properly wrapped this time.
+      yield { type: 'result', text: `<message to="matrix-mg-17844">${replyText}</message>` };
+    }
+    const query: AgentQuery = {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    };
+
+    const routing = {
+      platformId: 'matrix:@scm2409:matrix.org',
+      channelType: 'matrix',
+      threadId: null,
+      inReplyTo: 'm1',
+      taskRun: false,
+    };
+
+    await processQuery(query, routing, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    // Exactly one re-wrap nudge, and the retry must be recognized as an
+    // echo of the tool send — only the original tool-sent message survives.
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]).toContain('was not delivered');
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe(replyText);
   });
 });
 

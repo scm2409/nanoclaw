@@ -499,6 +499,13 @@ export async function processQuery(
         log(`Pushing ${keep.length} follow-up message(s) into active query`);
         unwrappedNudged = false;
         taskBlockNudged = false;
+        // A genuinely new turn — reset the echo-suppression window here, not
+        // unconditionally after every 'result' (see the 'result' handler
+        // below): a same-turn re-wrap/task-block retry must keep seeing an
+        // earlier tool-call send as "this turn", or the model's compliant
+        // retry gets delivered as a real duplicate of what the tool already
+        // sent (2026-08-08 incident: outbound seq 941 and 947, byte-identical).
+        markTurnStart();
         query.push(prompt);
         archivePrompts.push(prompt);
         markCompleted(keptIds);
@@ -642,9 +649,9 @@ export async function processQuery(
             if (!willRetryWrapping && !willRetryTaskBlocks) archivePrompts.shift();
           }
         } else archivePrompts.shift();
-        // Turn boundary: a follow-up pushed into this same stream is a new
-        // turn and must not dedupe against what the previous one sent.
-        markTurnStart();
+        // Turn boundary now lives at the follow-up push site above, not here:
+        // a same-turn re-wrap/task-block retry result must NOT reset the
+        // echo-suppression window (see markTurnStart() call above for why).
       }
     }
   } catch (err) {
