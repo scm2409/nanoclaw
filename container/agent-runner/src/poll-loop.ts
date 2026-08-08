@@ -506,6 +506,14 @@ export async function processQuery(
         // retry gets delivered as a real duplicate of what the tool already
         // sent (2026-08-08 incident: outbound seq 941 and 947, byte-identical).
         markTurnStart();
+        // Republish in_reply_to for this batch — a tool call made after this
+        // push must thread against the message that's actually in play, not
+        // the one that started the stream (setCurrentInReplyTo is otherwise
+        // only called once, for the initial batch, at the top of this loop
+        // iteration). Same incident: outbound seq 941 stamped in_reply_to
+        // against the message that opened the stream instead of the one it
+        // actually answered.
+        setCurrentInReplyTo(extractRouting(keep).inReplyTo);
         query.push(prompt);
         archivePrompts.push(prompt);
         markCompleted(keptIds);

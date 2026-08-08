@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from './db/connection.js';
-import { getPendingMessages, markCompleted } from './db/messages-in.js';
+import { getPendingMessages, markCompleted, markProcessing } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
 import { isCorruptionError, processQuery, resetTokenUsageBaseline } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import { sendMessage } from './mcp-tools/core.js';
+import { setCurrentInReplyTo } from './db/session-state.js';
 import type { AgentQuery, ProviderEvent } from './providers/types.js';
 
 beforeEach(() => {
@@ -564,6 +565,69 @@ describe('duplicate delivery across a same-turn re-wrap retry', () => {
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0].content).text).toBe(replyText);
+  });
+});
+
+describe('current_in_reply_to follows the active follow-up batch', () => {
+  it('stamps a tool send made after a follow-up push against the follow-up message, not the original', async () => {
+    // setCurrentInReplyTo is only called once, for the initial batch
+    // (poll-loop.ts:290). A tool call made after the follow-up poller pushes
+    // a later message into the same continuous stream must thread against
+    // that later message, not the one that started the stream — otherwise a
+    // reply lands mis-threaded (2026-08-08 incident: outbound seq 941
+    // stamped in_reply_to against message 792 instead of 798, the message it
+    // actually answered).
+    getInboundDb()
+      .prepare(
+        `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
+         VALUES ('ops', 'ops', 'channel', 'matrix', 'matrix:@user:example.org', NULL)`,
+      )
+      .run();
+
+    insertMessage('m1', 'chat', { sender: 'User', text: 'first question' });
+    const initialMessages = getPendingMessages();
+    const routing = extractRouting(initialMessages);
+    // Mirrors what runPollLoop does right before calling processQuery
+    // (poll-loop.ts:196, 290) — this test drives processQuery directly, so
+    // it has to set up the same preconditions by hand. Without marking m1
+    // processing, the follow-up poller's own getPendingMessages() call would
+    // see m1 as still pending alongside m2 and derive in_reply_to from m1
+    // (the older of the two) again — masking the very staleness this test
+    // checks for.
+    markProcessing(initialMessages.map((m) => m.id));
+    setCurrentInReplyTo(routing.inReplyTo);
+
+    const pushes: string[] = [];
+    let toolSendReplyTo: string | null | undefined;
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 'sess-1' };
+
+      insertMessage('m2', 'chat', { sender: 'User', text: 'follow-up question' });
+      const deadline = Date.now() + 5000;
+      while (pushes.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      await sendMessage.handler({ to: 'ops', text: 'answering the follow-up' });
+      const rows = getUndeliveredMessages();
+      toolSendReplyTo = rows[rows.length - 1]?.in_reply_to;
+
+      yield { type: 'result', text: '<message to="ops">done</message>' };
+    }
+    const query: AgentQuery = {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    };
+
+    await processQuery(query, routing, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]).toContain('follow-up question');
+    expect(toolSendReplyTo).toBe('m2');
   });
 });
 

@@ -11,6 +11,35 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-08 — fixed the deferred in_reply_to staleness follow-up from the duplicate-reply investigation
+
+Follow-up to the same-day duplicate-Matrix-reply fix below. That investigation
+found a second, unrelated bug in the same code region and left it unfixed on
+purpose (not a duplicate-delivery cause, just wrong reply threading) — this
+closes it.
+
+`send_message`/`send_file` stamp outbound rows with `in_reply_to` read from
+`current_in_reply_to` (`session_state` in `outbound.db`), but
+`setCurrentInReplyTo` was only ever called once per active query — for the
+initial batch, at `poll-loop.ts:290`. When the same continuous stream later
+absorbed a follow-up message via the concurrent follow-up poller, the stamp
+never moved, so a tool call made after that point still threaded against
+whatever message had originally opened the stream, not the one actually in
+play. Live incident evidence: outbound seq 941 was stamped `in_reply_to`
+against a message from 10:05 instead of the one from 10:12 it actually
+answered.
+
+Fix: the follow-up poller now republishes `current_in_reply_to` for its own
+batch (`setCurrentInReplyTo(extractRouting(keep).inReplyTo)`), right
+alongside the `markTurnStart()` call added by the duplicate-reply fix — same
+"this is where a new batch starts" cluster in `poll-loop.ts`. New regression
+test in `poll-loop.test.ts` drives a real follow-up push through
+`processQuery` and asserts a tool send made afterward threads against the
+follow-up message; it failed on the prior code (stayed pinned to the
+original message) and passes now.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-08 — fixed the real cause of duplicate Matrix replies (turn-boundary reset, not a Matrix bug)
 
 KaiL01 sent the same Matrix reply twice again, despite the 2026-08-02 fix
