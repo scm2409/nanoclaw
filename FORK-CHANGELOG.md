@@ -11,6 +11,63 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-09 — DokuWiki review-queue integration for kail01
+
+New fork-local tool skill, `.claude/skills/add-dokuwiki-tool/SKILL.md`, wiring
+a review-gated DokuWiki (running a separate, fork-external `reviewqueue`
+plugin project) into the owner's agent group as an MCP tool. Mirrors
+`/add-nextcloud-tool`'s OneCLI-native shape (no credential ever reaches the
+container; the gateway rewrites the `Authorization` header at request time)
+but for Bearer auth against a remote HTTP MCP endpoint instead of Basic
+auth against a native stdio server: `mcp-remote` (pinned `0.1.38` via
+`container/cli-tools.json`, invoked directly by binary name — not `npx`,
+which would silently ignore the pin and fetch latest on every cold start)
+bridges the stdio-only `ncl groups config add-mcp-server` schema to the
+plugin's `https://.../lib/plugins/mcp/mcp.php` endpoint. Its native
+`--enable-proxy` flag was enough to route through the gateway; unlike the
+Nextcloud integration, no custom env-proxy shim was needed.
+
+Because the whole point of the review queue is to keep the agent from
+touching the live wiki unsupervised, the tools are `subagentOnly: true`,
+held by a new dedicated `dokuwiki` subagent
+(`groups/main-agent/.claude/agents/dokuwiki.md`) rather than given to
+`kail01` directly — same isolation pattern as the existing `nextcloud`
+subagent. A new container skill, `container/skills/dokuwiki-reviewqueue`
+(also bundled inside the tool skill for redistribution), teaches whoever
+holds the tools the one rule that matters: a "submitted for review" save
+response is success, not failure, and re-reading a page afterward can
+silently overwrite the agent's own unreviewed draft.
+`instructions.prepend.md` gained a delegation section mirroring the
+existing Nextcloud one, so kail01 reports a queued change as done rather
+than as an error.
+
+Two environment prerequisites worth recording, both of which blocked
+verification until found:
+
+- The NanoClaw host and the wiki sit on separate VLANs with no route
+  between them, so every call timed out before reaching the wiki at all.
+  Worth isolating with a plain unauthenticated `curl` early: a
+  timeout is routing, a 401/403 is auth, a 500 is the wiki app itself.
+- The wiki is Debian-packaged, and every call to the MCP plugin's endpoint
+  returned HTTP 500. Debian splits core (`/usr/share/dokuwiki`, which holds
+  `vendor/`) from data and plugins (`/var/lib/dokuwiki`), and already
+  symlinks `inc` between them precisely so plugin entry points computing
+  `DOKU_INC` from `__DIR__` resolve (Debian bug #588405) — but `vendor` was
+  never added to that list when upstream adopted Composer. One symlink
+  (`/var/lib/dokuwiki/vendor → /usr/share/dokuwiki/vendor`) fixes it, and a
+  review of every `DOKU_INC` use confirms nothing else is missing behind
+  it. Documented in the skill's Phase 0, since the failure looks like a
+  missing Composer step and isn't one.
+
+Verified end to end against the live wiki: the agent delegated correctly,
+reported the write as "zur Review eingereicht — Change #2, pending, noch
+nicht live" rather than as published, and on a follow-up "is it visible
+yet?" returned the queued draft without stacking a second one — confirmed
+independently via `plugin_reviewqueue_listMyPending`, which showed exactly
+one pending change.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-08 — fixed the deferred in_reply_to staleness follow-up from the duplicate-reply investigation
 
 Follow-up to the same-day duplicate-Matrix-reply fix below. That investigation
