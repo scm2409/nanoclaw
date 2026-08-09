@@ -11,6 +11,44 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-09 — Harden dokuwiki subagent against secrets on the wiki
+
+`groups/main-agent/.claude/agents/dokuwiki.md` gained a `## Geheimnisse —
+nicht verhandelbar` section, same weight as the existing injection-defense
+one. Martin's wiki accumulates real credentials over time (passwords, API
+keys, VPN details) and the `dokuwiki` subagent is the only thing that ever
+sees raw page content — the caller (`kail01`) has no DokuWiki tools of its
+own, so this is the sole point where a leak or an accidental write can be
+stopped.
+
+Two rules: never repeat a secret-looking value (password/API-key/token
+labels, private-key blocks, `user:pass@host` connection strings) in the
+report back to the caller — flag its existence and page location only,
+never the value; and never write a secret into a page even if a task
+explicitly asks for it — refuse that part, report it under "not done",
+never submit a review-queue change containing it. The "Antwortformat"
+section's "Nicht getan" bullet now points at this explicitly.
+
+`kail01`'s persona fragment (`.claude-fragments/persona.md`) got one
+defense-in-depth sentence in its DokuWiki delegation section: a
+redacted-secret flag from the subagent is relayed to Martin as-is (page +
+"credential found, withheld"), never a value, and `kail01` never tries to
+fetch the raw page itself to check — cheap belt-and-braces, not the real
+control, since it never had the tools to do that anyway.
+
+`.claude/skills/add-dokuwiki-tool/SKILL.md` Phase 4 updated so future
+installs (and re-runs) generate this section too, instead of only the
+Nextcloud-derived reporting/injection boilerplate — it now points at this
+install's `dokuwiki.md` as the reference wording.
+
+No server-side/programmatic secret redaction — the MCP server is the
+external `dokuwiki-plugin-mcp` PHP plugin reached over `mcp-remote`, outside
+this repo's request path, so this is prompt/persona hardening only. No
+build or rebuild needed, just a container restart for the `groups/` file
+changes to take effect.
+
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-09 — DokuWiki review-queue integration for kail01
 
 New fork-local tool skill, `.claude/skills/add-dokuwiki-tool/SKILL.md`, wiring
