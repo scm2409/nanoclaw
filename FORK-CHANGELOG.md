@@ -29,12 +29,55 @@ explicitly asks for it — refuse that part, report it under "not done",
 never submit a review-queue change containing it. The "Antwortformat"
 section's "Nicht getan" bullet now points at this explicitly.
 
-`kail01`'s persona fragment (`.claude-fragments/persona.md`) got one
-defense-in-depth sentence in its DokuWiki delegation section: a
+`kail01`'s standing instructions (`groups/main-agent/instructions.prepend.md`)
+got a defense-in-depth paragraph in the DokuWiki delegation section: a
 redacted-secret flag from the subagent is relayed to Martin as-is (page +
 "credential found, withheld"), never a value, and `kail01` never tries to
 fetch the raw page itself to check — cheap belt-and-braces, not the real
 control, since it never had the tools to do that anyway.
+
+Live-testing the write refusal turned up a second, less obvious gap. The
+subagent correctly refused to put a password on a page, but `kail01` relayed
+that as *the subagent's own quirk* ("eine Eigenentscheidung des Subagenten,
+keine von mir vorgegebene Regel") and offered to try again or "work out a way
+to do it" — which is exactly the pressure the refusal exists to withstand.
+The paragraph therefore also states that both rules are house policy, and
+that a refusal is the end of the matter: report it, never offer a retry or a
+reformulation. A secret belongs in a password manager, not the wiki.
+
+A follow-up correction from Martin sharpened the rule in the other
+direction. The first wording treated anything following a
+password/token/key label as a secret, which over-fires on this wiki: its
+installation how-tos name usernames, hosts, ports and settings constantly,
+and for passwords Martin records at most a mnemonic (a first letter) —
+the actual secrets live in a password manager. Full secrets do occur (a
+plaintext LoRaWAN AppKey turned up in the survey), so the hard rule stands
+for those, but the section now says plainly that usernames, hosts, ports,
+paths and settings are the content the page exists for and must be reported
+normally, and that withholding is the exception rather than the default.
+An over-redacting subagent is useless here, because the caller holds no
+wiki tools and cannot check anything that gets redacted away. The installer
+skill carries the same counterweight.
+
+Testing the loosened rule on a real page then exposed the opposite leak.
+Asked for the usernames on the wiki's IT overview page, the subagent
+returned them correctly and withheld the passwords — except for two, whose
+plaintext values it passed along because it judged them "nur schwache
+Defaults". `kail01` caught them and refused to relay them further, so the
+second layer held where the first didn't, and it reported the discrepancy
+unprompted. Both files now say the rule admits no harmlessness exception:
+weak defaults, factory passwords, PINs, service codes and obvious test
+values are secret values, the agent cannot know where one is reused or who
+reads the answer, and catching itself building a case for why one value is
+fine is precisely the signal to withhold it.
+
+Worth recording for the next person who edits a persona: the first attempt
+put this in `groups/main-agent/.claude-fragments/persona.md`, which is the
+*generated* artifact — `composeGroupClaudeMd` rewrites the whole fragments
+directory from `instructions.prepend.md` on every container spawn, so the
+edit silently vanished at the next restart and only the live test revealed
+it. `instructions.prepend.md` is the source of truth; `.claude-fragments/`
+is downstream and disposable.
 
 `.claude/skills/add-dokuwiki-tool/SKILL.md` Phase 4 updated so future
 installs (and re-runs) generate this section too, instead of only the

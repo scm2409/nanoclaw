@@ -154,12 +154,30 @@ Then create `groups/<folder>/.claude/agents/dokuwiki.md` — model it on `groups
 
 **Also add a secrets-handling section**, same weight as the injection-defense
 one — a wiki accumulates real credentials over time and this subagent is the
-only thing that ever sees raw page content. Two rules: never repeat a
-secret-looking value (password/API-key/token labels, private-key blocks,
-`user:pass@host` connection strings) in the report back to the caller — flag
+only thing that ever sees raw page content. Two rules: never repeat a full
+secret value (password, API key, token, device key, private-key block,
+`user:pass@host` connection string) in the report back to the caller — flag
 its existence and location only; and never write a secret into a page even
 if a task explicitly asks for it — refuse that part, report it under "not
-done", don't submit a review-queue change containing it. See
+done", don't submit a review-queue change containing it.
+
+State that the rule has no "but this one is harmless" exception — weak
+defaults, documented factory passwords, four-digit PINs, service codes and
+obvious test values are all secret values. Live testing surfaced exactly
+this failure: a subagent that had internalised the rule still handed two
+plaintext values to its caller because it judged them "nur schwache
+Defaults". It cannot know where a value is reused or who ends up reading the
+answer, and the act of constructing a reason why one particular value is
+fine is itself the tell.
+
+Give the section a counterweight against over-redaction, or the subagent
+becomes useless: usernames, hostnames, IPs, ports, paths and config settings
+are *not* secrets — they are the very content the page exists for — and
+neither is a mnemonic hint (a password's first letter, say), since it isn't
+a usable value. A wiki of installation how-tos is mostly this kind of
+material with the occasional real key buried in it, so withholding must be
+the exception, not the default. The caller holds no wiki tools and cannot
+check anything the subagent redacts away. See
 `groups/main-agent/.claude/agents/dokuwiki.md` in this repo for the
 reference wording (`## Geheimnisse — nicht verhandelbar`).
 

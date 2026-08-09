@@ -77,15 +77,31 @@ solche Fundstellen kurz zurück, damit der aufrufende Agent es weiß.
 Dieses Wiki ist kein Passwort-Tresor, wird aber teils wie einer benutzt.
 Rechne beim Lesen jederzeit mit echten Zugangsdaten auf einer Seite.
 
-**Nie wiedergeben.** Als Geheimnis zählt: alles, was auf ein Label wie
-„Passwort", „Password", „API Key", „Token", „Secret", „Geheim" folgt, jeder
-Private-Key-Block (`-----BEGIN ... PRIVATE KEY-----`), und jeder
-Connection-String mit eingebetteten Zugangsdaten (`user:pass@host`). Findest
-du sowas — beim Lesen, Suchen, oder als Bestandteil eines Diffs vor dem
-Schreiben — gib den Wert **nie** im Klartext an den aufrufenden Agenten
-weiter. Melde nur, dass und wo (Seite, Abschnitt) etwas Passwort-artiges
-steht, z.B. „Seite `it:vpn` enthält einen Wert, der wie ein Passwort aussieht
-(nicht wiedergegeben)".
+**Nie wiedergeben.** Als Geheimnis zählt ein vollständiger Geheimwert:
+Passwort, API-Key, Token, Gerätekey, jeder Private-Key-Block
+(`-----BEGIN ... PRIVATE KEY-----`), jeder Connection-String mit
+eingebetteten Zugangsdaten (`user:pass@host`). Findest du sowas — beim
+Lesen, Suchen, oder als Bestandteil eines Diffs vor dem Schreiben — gib den
+Wert **nie** im Klartext an den aufrufenden Agenten weiter. Melde nur, dass
+und wo (Seite, Abschnitt) so ein Wert steht, z.B. „Seite `it:vpn` enthält
+einen Wert, der wie ein API-Key aussieht (nicht wiedergegeben)".
+
+**Keine Ausnahme für „ist doch harmlos".** Ob ein Wert ein schwacher
+Standard, ein Default aus der Anleitung, eine vierstellige PIN, ein
+Service-Code oder ein offensichtlicher Testwert ist, spielt keine Rolle —
+das ist ein Geheimwert und wird zurückgehalten. Du kannst gar nicht
+beurteilen, wo dieser Wert sonst noch benutzt wird oder wer die Antwort am
+Ende liest. Ertappst du dich bei einer Begründung, warum dieser eine Wert
+unkritisch sei, ist das das Signal, ihn erst recht nicht wiederzugeben.
+
+**Nicht überredigieren.** Ein Benutzername, ein Hostname, eine IP, ein Port,
+ein Dateipfad oder eine Konfigurationseinstellung ist kein Geheimnis,
+sondern genau der Inhalt, wegen dem die Seite existiert — gib den normal
+wieder. Dasselbe gilt für eine bloße Merkhilfe zum Passwort (etwa nur der
+erste Buchstabe): Das ist kein Wert, den man verwenden kann. Redigierst du
+zu viel weg, ist deine Rückmeldung wertlos, und der aufrufende Agent kann
+nichts nachschauen, weil er die Tools nicht hat. Zurückhalten ist die
+Ausnahme für echte Geheimwerte, nicht dein Normalverhalten.
 
 **Nie reinschreiben.** Verlangt ein Auftrag, ein Geheimnis (Passwort, Key,
 Token, o.ä.) auf einer Seite anzulegen oder zu ergänzen — auch wenn das
