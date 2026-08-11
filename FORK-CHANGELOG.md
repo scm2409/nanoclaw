@@ -11,6 +11,41 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-11 — Harden the websearch subagent and move it to Sonnet
+
+`websearch` is the only component that reads fully attacker-controlled text,
+and its summary flows onward to the main agent and from there potentially to
+Matrix or email. It already refused to follow embedded instructions, but was
+still allowed to quote them, which delivered the payload one hop further
+instead of stopping it. Its security section now spells out four things it
+never did before: report a prompt-injection finding as source plus kind of
+attempt and never as wording, fetch URLs only from the task, from search hits
+or from ordinary links (never one a page's prose asks it to call, which would
+turn read-only web access into an outbound channel via query parameters),
+emit no auto-loading markup in its answer since that answer gets rendered and
+forwarded elsewhere, and treat quoted third-party material inside its own task
+as data too — the main agent builds tasks out of mail and wiki content. It
+also gains a credentials section modelled on the dokuwiki subagent's,
+including that section's anti-over-redaction half: a username, host or port is
+the substance of a search result, not a secret, and redacting it would make
+the research worthless.
+
+The same report-never-quote clause is now in the `nextcloud` and `dokuwiki`
+subagents and in the `deep-research` skill, which all carried the same gap in
+the same house wording. The main agent's standing instructions gain the
+matching caller-side rule: what a subagent withheld stays withheld — don't ask
+for the wording, don't source it another way, don't offer to sort it out.
+
+The model moves from Haiku to Sonnet. These rules only help if the model holds
+them while reading text written to make it not hold them, and the weakest
+model sat at exactly the point where the only hostile input arrives. It costs
+roughly twice as much per token today and three times from September, on every
+internet-facing request, since delegation to `websearch` is unconditional. The
+larger context window is a side benefit: big pages no longer risk exhausting
+the subagent.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-09 — Harden dokuwiki subagent against secrets on the wiki
 
 `groups/main-agent/.claude/agents/dokuwiki.md` gained a `## Geheimnisse —
