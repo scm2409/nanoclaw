@@ -141,6 +141,19 @@ RUN cp /tmp/httpx-env-proxy-shim.py \
        "$(ls -d /opt/uv/tools/nextcloud-mcp-server/lib/python3.*/site-packages)/sitecustomize.py" && \
     rm /tmp/httpx-env-proxy-shim.py
 
+# Martin's fork of mcp-mealie (github.com/scm2409/mcp-mealie), which adds a
+# restricted mode over upstream mgummich/mcp-mealie. Pinned to a commit, not
+# a tag or @main: restricted mode is unreleased on the fork (__version__ is
+# still 0.3.1, no git tag exists), and an unpinned ref would let a routine
+# image rebuild silently change the tool surface — see
+# src/mealie-mcp-pin.test.ts, which fails the build if this ever points at a
+# branch name instead of a commit.
+ARG MEALIE_MCP_REF=80e9166
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv tool install --python 3.12 \
+      "git+https://github.com/scm2409/mcp-mealie@${MEALIE_MCP_REF}" && \
+    chmod -R a+rX /opt/uv
+
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \

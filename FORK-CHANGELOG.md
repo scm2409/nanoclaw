@@ -11,6 +11,87 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-14 — Mealie MCP server, subagent-only, restricted mode
+
+Wired Martin's fork of `mcp-mealie` (`github.com/scm2409/mcp-mealie`) into
+KaiL01, in the same subagent-only shape as Nextcloud and DokuWiki: the main
+agent never holds the Mealie tools, a dedicated `mealie` subagent does, and
+the real API token never enters the container — the OneCLI gateway rewrites
+the `Authorization` header at request time.
+
+**Restricted mode.** Upstream `mgummich/mcp-mealie` has no access-restriction
+mechanism at all; Martin's fork adds `MEALIE_RESTRICTED_MODE`, which filters
+the tool list at MCP registration time rather than rejecting calls at
+runtime — a blocked tool never appears in `tools/list`, so the subagent can't
+even attempt it. Under restricted mode: reads, `create_recipe`,
+`add_recipe_note` (append-only), `import_recipe_from_url`, and the full meal
+plan survive; `update_recipe`, `delete_recipe`, `set_recipe_image`,
+`upload_recipe_image`, `bulk_tag_recipes`, and all cookbook/taxonomy
+mutation do not.
+
+**Deliberate caveat, accepted as-is.** The fork's meal-plan tool module
+accepts a `restricted` flag but never reads it — restricted mode therefore
+grants *full* meal-plan write access, including `delete_meal_plan_entry`.
+Not a bug to route around; the meal plan just isn't part of what this flag
+protects.
+
+**No shopping-list tools exist in this server**, restricted mode or not —
+absent upstream, not something the flag is hiding. Noted in the subagent
+file so it doesn't hunt for a capability that was never there.
+
+**Unpinned-fork risk, closed with a build-time test.** Restricted mode
+lives on an unreleased commit (`80e9166`) — the fork has no git tag and
+`__version__` is still `0.3.1`. Following the fork's own README verbatim
+(`@v0.3.1`) would silently install a ref *without* restricted mode. The
+Dockerfile pins `ARG MEALIE_MCP_REF=80e9166` (a commit SHA, not a branch),
+and `src/mealie-mcp-pin.test.ts` fails the build if that ARG is ever changed
+to `main`/`master`/`HEAD` or anything that isn't a SHA or version tag —
+otherwise a routine rebuild could silently pick up whatever `main` becomes.
+
+**No httpx proxy shim needed, unlike Nextcloud.** `nextcloud-mcp-server`
+needed a hand-rolled `sitecustomize.py` shim because its Deck client builds
+an explicit `httpx.AsyncHTTPTransport` that bypasses `HTTPS_PROXY`
+resolution, silently skipping the OneCLI gateway. `mcp-mealie`'s client
+lets `httpx.AsyncClient` build its own transport with no explicit
+`transport=` argument, so httpx reads `HTTPS_PROXY` itself — the exact
+condition the shim exists to work around doesn't apply here. Flagged as an
+open risk instead: whether the resolved httpx version honors
+`SSL_CERT_FILE` for `verify=True` against the gateway's MITM cert is
+unverified pending network access to the instance; if it doesn't, pin httpx
+explicitly rather than reaching for `MEALIE_VERIFY_SSL=false`, which would
+disable verification for every request instead of just trusting one CA.
+
+**Injection surface, new relative to DokuWiki/Nextcloud.**
+`import_recipe_from_url` makes the server fetch a URL server-side and
+persist whatever comes back — a URL sourced from untrusted content (a
+recipe's own text, a note, another agent's output) turns a prompt injection
+into a write. The subagent file restricts that tool to URLs the operator
+supplied directly, on top of the usual report-never-quote handling of
+embedded instructions and secret-looking values.
+
+**Content language is a data fact, not a house style.** Following house
+convention (English code/skills/docs), the new `mealie` subagent file and
+the shipped `mealie-restricted` container skill are English — a departure
+from `dokuwiki.md`/`nextcloud.md`, which are German and predate that
+convention. Separately, and orthogonally: what the subagent *writes into
+Mealie* (recipe titles, ingredients, notes, meal-plan entries) is German,
+stated as a fact about this specific recipe collection in the subagent file
+and in `instructions.local.md`, not left to whatever language a task
+happens to arrive in. Imported recipe text (`import_recipe_from_url`) is
+the one exception — it keeps the source page's language rather than being
+silently translated after the fact.
+
+**Verified end-to-end.** Gateway injection confirmed (a deliberately wrong
+`Bearer dummy-placeholder` still returned an authenticated response for
+Mealie user `kail`). Asked the `mealie` subagent to list its own tools: it
+reported exactly the 18 tools restricted mode should expose and, unprompted,
+named the 6 it doesn't have (`update_recipe`, `delete_recipe`,
+`set_recipe_image`, `upload_recipe_image`, `bulk_tag_recipes`, cookbook
+mutation) — confirming the filter happens at registration, not as a runtime
+rejection the model could talk its way around.
+
+vibecoded with Opus 5
+
 ## 2026-08-11 — Harden the websearch subagent and move it to Sonnet
 
 `websearch` is the only component that reads fully attacker-controlled text,
