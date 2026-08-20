@@ -11,6 +11,39 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-20 — Auto-resume after Anthropic usage-limit rejection
+
+Martin reported that when KaiL hits Anthropic's usage limit (the SDK's
+`rate_limit_event` rejection), it drops one apologetic error message and
+just stops — nothing brought it back once the limit reset, so he had to
+notice and re-message it manually. Wired the pieces that already existed
+(rate-limit classification, the `processAfter`/due-message wake host-sweep
+already uses for scheduled tasks, and the container→host system-action
+bridge) into an actual auto-resume path.
+
+Container side (`container/agent-runner/src/providers/claude.ts`,
+`providers/types.ts`, `poll-loop.ts`): `classifyRateLimitEvent()`'s
+`resetsAt` now travels as structured data on the `ProviderEvent`, not just
+folded into a message string. When a turn ends in a `rate_limit` rejection
+(never `quota`/out-of-credits — waiting doesn't fix an empty balance) with a
+known `resetsAt`, and the triggering message's own retry count is under a
+cap of 3, poll-loop now writes a `schedule_usage_limit_retry` system action
+alongside the existing error notice, and tells the user it will resume
+automatically.
+
+Host side (new `src/modules/usage-limit-retry.ts`, wired into
+`src/modules/index.ts`): a plain, unguarded delivery-action handler — no
+privileged side effect, it only re-wakes the session that asked for it —
+turns that system action into a `writeSessionMessage`-style inbound row with
+`process_after` set ~60s past the reported reset time. No kill/respawn
+needed; the same container just gets woken again once due, via host-sweep's
+existing due-message path, and the SDK's own conversation continuation
+means the model picks the conversation back up rather than starting fresh.
+
+vibecoded with Claude Sonnet 5
+
+---
+
 ## 2026-08-14 — Mealie MCP server, subagent-only, restricted mode
 
 Wired Martin's fork of `mcp-mealie` (`github.com/scm2409/mcp-mealie`) into

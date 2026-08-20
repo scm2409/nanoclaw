@@ -55,18 +55,20 @@ export interface SdkRateLimitInfo {
  */
 export function classifyRateLimitEvent(
   info: SdkRateLimitInfo | undefined,
-): { message: string; classification: 'rate_limit' | 'quota' } | null {
+): { message: string; classification: 'rate_limit' | 'quota'; resetsAt?: number } | null {
   if (info?.status !== 'rejected') return null;
   const outOfCredits = info.errorCode === 'credits_required' || info.overageDisabledReason === 'out_of_credits';
   let detail = '';
+  let resetsAtMs: number | undefined;
   if (typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt)) {
-    const ms = info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt;
-    detail = ` (resets ${new Date(ms).toISOString()})`;
+    resetsAtMs = info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt;
+    detail = ` (resets ${new Date(resetsAtMs).toISOString()})`;
   }
   const window = info.rateLimitType ? ` [${info.rateLimitType}]` : '';
   return {
     message: `${outOfCredits ? 'Out of credits' : 'Rate limit'}${window}${detail}`,
     classification: outOfCredits ? 'quota' : 'rate_limit',
+    resetsAt: resetsAtMs,
   };
 }
 
@@ -705,7 +707,13 @@ export class ClaudeProvider implements AgentProvider {
               );
             }
           } else {
-            yield { type: 'error', message: blocked.message, retryable: false, classification: blocked.classification };
+            yield {
+              type: 'error',
+              message: blocked.message,
+              retryable: false,
+              classification: blocked.classification,
+              resetsAt: blocked.resetsAt,
+            };
           }
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
           const meta = (message as { compact_metadata?: { pre_tokens?: number } }).compact_metadata;

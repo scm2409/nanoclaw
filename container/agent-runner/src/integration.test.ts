@@ -401,6 +401,68 @@ describe('poll loop — provider error recovery', () => {
   });
 });
 
+describe('poll loop — usage limit auto-retry', () => {
+  it('schedules a retry when a rate_limit rejection ends the turn', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'trigger rate limit' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const resetsAtMs = Date.parse('2026-08-20T12:00:00.000Z');
+    const provider = new RateLimitProvider('rate_limit', resetsAtMs);
+    const controller = new AbortController();
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
+
+    await waitFor(() => getUndeliveredMessages().length >= 2, 2000);
+    await stopPollLoop(controller, loop);
+
+    const out = getUndeliveredMessages();
+    const chat = out.find((m) => m.kind === 'chat');
+    const system = out.find((m) => m.kind === 'system');
+    expect(chat).toBeDefined();
+    expect(system).toBeDefined();
+
+    expect(JSON.parse(chat!.content).text).toContain('resume');
+
+    const payload = JSON.parse(system!.content);
+    expect(payload.action).toBe('schedule_usage_limit_retry');
+    expect(payload.resetsAt).toBe(new Date(resetsAtMs).toISOString());
+    expect(payload.retryCount).toBe(0);
+
+    // Input message should still be acked (no redelivery of the original)
+    const pending = getPendingMessages();
+    expect(pending).toHaveLength(0);
+  });
+
+  it('does not schedule a retry for quota (out-of-credits) errors', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'trigger quota error' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new RateLimitProvider('quota', Date.parse('2026-08-20T12:00:00.000Z'));
+    const controller = new AbortController();
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    await stopPollLoop(controller, loop);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe('chat');
+  });
+
+  it('stops scheduling once the retry cap is reached', async () => {
+    // Simulates the auto-injected continue-nudge on its 3rd consecutive rejection.
+    insertMessage('m1', { text: 'Usage limit has reset — continue where you left off.', retryCount: 3 });
+
+    const provider = new RateLimitProvider('rate_limit', Date.parse('2026-08-20T12:00:00.000Z'));
+    const controller = new AbortController();
+    const loop = startPollLoop(provider as unknown as MockProvider, controller.signal);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    await stopPollLoop(controller, loop);
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe('chat');
+  });
+});
+
 describe('poll loop — stale session recovery', () => {
   it('clears continuation when provider reports session invalid', async () => {
     // Pre-seed a continuation so the local variable in runPollLoop is set.
@@ -509,6 +571,42 @@ class InvalidSessionProvider {
       events: (async function* () {
         yield { type: 'init' as const, continuation: 'doomed-session' };
         throw new Error('session not found');
+      })(),
+    };
+  }
+}
+
+/**
+ * Provider that emits a rejected rate_limit_event (as the 'error' provider
+ * event) followed by an isError terminal result — mirroring what
+ * claude.ts's translateEvents() yields for a real Anthropic usage-limit
+ * rejection.
+ */
+class RateLimitProvider {
+  readonly supportsNativeSlashCommands = false;
+  private classification: 'rate_limit' | 'quota';
+  private resetsAt: number;
+
+  constructor(classification: 'rate_limit' | 'quota', resetsAt: number) {
+    this.classification = classification;
+    this.resetsAt = resetsAt;
+  }
+
+  isSessionInvalid(): boolean {
+    return false;
+  }
+
+  query(_input: { prompt: string; cwd: string }) {
+    const classification = this.classification;
+    const resetsAt = this.resetsAt;
+    return {
+      push() {},
+      end() {},
+      abort() {},
+      events: (async function* () {
+        yield { type: 'init' as const, continuation: 'rate-limited-session' };
+        yield { type: 'error' as const, message: 'Rate limit', retryable: false, classification, resetsAt };
+        yield { type: 'result' as const, text: 'Rate limited', isError: true };
       })(),
     };
   }

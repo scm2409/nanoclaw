@@ -153,7 +153,7 @@ export type ProviderEvent =
         }
       >;
     }
-  | { type: 'error'; message: string; retryable: boolean; classification?: string }
+  | { type: 'error'; message: string; retryable: boolean; classification?: string; resetsAt?: number }
   | { type: 'progress'; message: string }
   /**
    * A subagent (SDK `Task` tool) was invoked. `model` is the resolved model

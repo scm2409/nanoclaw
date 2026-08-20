@@ -36,6 +36,20 @@ describe('classifyRateLimitEvent', () => {
     expect(secs!.message).toBe(ms!.message);
   });
 
+  it('also returns the reset time as structured ms-epoch data, not just message text', () => {
+    // Auto-resume scheduling needs a real number to compute process_after from
+    // — parsing it back out of the human-readable message string is fragile.
+    const secs = classifyRateLimitEvent({ status: 'rejected', resetsAt: 1_700_000_000 });
+    const ms = classifyRateLimitEvent({ status: 'rejected', resetsAt: 1_700_000_000_000 });
+    expect(secs!.resetsAt).toBe(1_700_000_000_000);
+    expect(ms!.resetsAt).toBe(1_700_000_000_000);
+  });
+
+  it('leaves resetsAt undefined when the SDK does not provide one', () => {
+    const r = classifyRateLimitEvent({ status: 'rejected', rateLimitType: 'five_hour' });
+    expect(r!.resetsAt).toBeUndefined();
+  });
+
   it('reports genuine credit exhaustion as a billing problem', () => {
     const byErrorCode = classifyRateLimitEvent({ status: 'rejected', errorCode: 'credits_required' });
     expect(byErrorCode!.classification).toBe('quota');

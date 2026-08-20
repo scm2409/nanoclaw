@@ -64,6 +64,32 @@ function generateId(): string {
 }
 
 /**
+ * Max consecutive auto-scheduled retries after a rate_limit rejection before
+ * giving up and leaving it to the user. Guards against a bogus/repeating
+ * `resetsAt` turning this into an infinite wake loop.
+ */
+const USAGE_LIMIT_RETRY_CAP = 3;
+
+/**
+ * Read the retryCount the host stamped on the auto-injected "continue where
+ * you left off" nudge (see src/modules/usage-limit-retry.ts on the host
+ * side). Absent on any normal user message, which is exactly the "first
+ * attempt" case (0).
+ */
+function getRetryCount(messages: MessageInRow[]): number {
+  let max = 0;
+  for (const m of messages) {
+    try {
+      const content = JSON.parse(m.content) as { retryCount?: unknown };
+      if (typeof content.retryCount === 'number' && content.retryCount > max) max = content.retryCount;
+    } catch {
+      // not JSON / no retryCount — ignore
+    }
+  }
+  return max;
+}
+
+/**
  * True when the triggering inbound row was an agent-to-agent message
  * (`channel_type: 'agent'`) — this includes a container's own `on_wake`
  * restart message, which agent-route.ts always stamps with `channel_type:
@@ -310,6 +336,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         continuation,
         config.logSubagents,
         config.showTokenUsage,
+        getRetryCount(keep),
       );
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
@@ -402,6 +429,7 @@ export async function processQuery(
   initialContinuation: string | undefined,
   logSubagents = false,
   showTokenUsage = false,
+  retryCount = 0,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -415,6 +443,11 @@ export async function processQuery(
   // relayed as a fresh chat message) gets caught after one delivery instead
   // of spammed forever.
   let lastDeliveredErrorText: string | null | undefined;
+  // Most recent rate-limit/quota classification seen via an 'error' event —
+  // arrives shortly before the terminal 'result' event that ends the turn,
+  // so it has to be captured here and consulted when that result lands.
+  let lastRateLimitClassification: string | undefined;
+  let lastRateLimitResetsAt: number | undefined;
   // Prompt queue for the exchange hook — each result event consumes the
   // oldest unanswered prompt, except a wrapping-retry result, which answers
   // the same prompt again. Unused (and unmaintained) when the provider
@@ -565,6 +598,11 @@ export async function processQuery(
 
       if (event.type === 'subagent') {
         if (logSubagents) deliverSubagentNotice(event, routing);
+      } else if (event.type === 'error') {
+        if (event.classification) {
+          lastRateLimitClassification = event.classification;
+          lastRateLimitResetsAt = event.resetsAt;
+        }
       } else if (event.type === 'init') {
         queryContinuation = event.continuation;
         // Persist immediately so a mid-turn container crash still lets the
@@ -617,7 +655,17 @@ export async function processQuery(
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
             // the failing gateway turn after turn.
             lastDeliveredErrorText = event.text;
-            deliverErrorResult(event.text, routing);
+            const scheduled = maybeScheduleUsageLimitRetry(
+              lastRateLimitClassification,
+              lastRateLimitResetsAt,
+              retryCount,
+              routing,
+            );
+            deliverErrorResult(
+              event.text,
+              routing,
+              scheduled ? ' It will resume automatically once the usage limit resets.' : '',
+            );
             notifyExchangeComplete(onExchangeComplete, {
               prompt: archivePrompts[0] ?? initialPrompt,
               result: event.text,
@@ -809,7 +857,7 @@ function deliverTokenUsageNotice(
  * This is the same user-facing write the outer catch block does, minus the
  * `Error:` prefix — the provider's text is already a user-facing message.
  */
-function deliverErrorResult(text: string, routing: RoutingContext): void {
+function deliverErrorResult(text: string, routing: RoutingContext, suffix = ''): void {
   if (isAgentToAgentRoute(routing)) return;
   log('Error result with no <message> envelope — delivering to channel');
   writeMessageOut({
@@ -819,8 +867,50 @@ function deliverErrorResult(text: string, routing: RoutingContext): void {
     platform_id: routing.platformId,
     channel_type: routing.channelType,
     thread_id: routing.threadId,
-    content: JSON.stringify({ text }),
+    content: JSON.stringify({ text: text + suffix }),
   });
+}
+
+/**
+ * If the turn just ended on a transient rate_limit rejection (never
+ * 'quota' — out-of-credits doesn't resolve by waiting) with a known
+ * resetsAt, and we haven't already auto-retried too many times in a row,
+ * ask the host to wake this session again once the limit clears. The host
+ * applies this via a `writeSessionMessage(..., processAfter)` row that rides
+ * the same due-message wake host-sweep already uses for scheduled tasks —
+ * see src/modules/usage-limit-retry.ts on the host side.
+ *
+ * Skipped on the agent-to-agent route for the same reason deliverErrorResult
+ * is: an on_wake self-message looping through here again would re-schedule
+ * itself (see isAgentToAgentRoute's doc comment for the live-incident
+ * context that guard exists for).
+ *
+ * Returns whether a retry was actually scheduled, so the caller can decide
+ * whether the delivered error text should promise one.
+ */
+function maybeScheduleUsageLimitRetry(
+  classification: string | undefined,
+  resetsAt: number | undefined,
+  retryCount: number,
+  routing: RoutingContext,
+): boolean {
+  if (classification !== 'rate_limit' || typeof resetsAt !== 'number') return false;
+  if (retryCount >= USAGE_LIMIT_RETRY_CAP) {
+    log(`Usage limit retry cap (${USAGE_LIMIT_RETRY_CAP}) reached — not scheduling another auto-retry`);
+    return false;
+  }
+  if (isAgentToAgentRoute(routing)) return false;
+  writeMessageOut({
+    id: generateId(),
+    kind: 'system',
+    content: JSON.stringify({
+      action: 'schedule_usage_limit_retry',
+      resetsAt: new Date(resetsAt).toISOString(),
+      retryCount,
+    }),
+  });
+  log(`Scheduled usage-limit retry for ${new Date(resetsAt).toISOString()} (attempt ${retryCount + 1})`);
+  return true;
 }
 
 /**
