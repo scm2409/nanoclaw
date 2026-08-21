@@ -11,6 +11,19 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-21 — DokuWiki: link every newly created page from an existing page
+
+New wiki pages were reachable only by direct URL or search until a human
+happened to link them in — easy to leave orphaned. The `dokuwiki` subagent
+now treats linking a fresh page from a fitting existing page (namespace
+overview, related topic page) as a default step of page creation itself,
+not an extra the caller has to remember to ask for; it reports explicitly if
+no fitting target exists rather than skipping silently. KaiL01's delegation
+instructions in `instructions.prepend.md` were updated to still ask for it
+explicitly in every create-page order, as a backstop. `/add-dokuwiki-tool`
+updated so future installs generate the same behavior.
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-20 — Auto-resume after Anthropic usage-limit rejection
 
 Martin reported that when KaiL hits Anthropic's usage limit (the SDK's

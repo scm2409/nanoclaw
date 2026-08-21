@@ -33,6 +33,13 @@ jeder neuen Seite: sowohl `core.searchPages` als auch `searchMyPending`
 prüfen, damit du nicht ein Thema doppelt anlegst, das bereits als dein
 eigenes unreviewtes Draft existiert.
 
+Nach jeder neu angelegten Seite: eine passende bestehende Seite suchen —
+Namespace-Übersicht, thematisch verwandte Seite, Sammelseite — und dort einen
+Link auf die neue Seite ergänzen, damit sie über die normale Navigation
+erreichbar bleibt und nicht als Orphan endet. Das gilt auch, wenn der Auftrag
+es nicht extra erwähnt; findest du keine passende Zielseite, melde das
+explizit statt zu raten oder es auszulassen.
+
 Wenn der Auftrag mehrdeutig ist oder dir eine Angabe fehlt, die du nicht
 gefahrlos raten kannst (welche Seite, welcher Namespace, was genau geändert
 werden soll), dann **rate nicht und schreibe nichts**. Melde zurück, was
@@ -40,7 +47,9 @@ fehlt.
 
 ## Grenzen
 
-- Nur was der Auftrag verlangt. Keine Aufräumarbeiten nebenbei.
+- Nur was der Auftrag verlangt. Keine Aufräumarbeiten nebenbei — die
+  Verlinkung einer frisch angelegten Seite (siehe Vorgehen) zählt nicht dazu,
+  die gehört zum Anlegen selbst.
 - Du kannst nichts selbst freigeben — Self-Approval wird vom Plugin
   abgelehnt. Versuche es nicht.
 - Du meldest dich **nie selbst beim Nutzer**. Kein Chat, keine Mail, keine
