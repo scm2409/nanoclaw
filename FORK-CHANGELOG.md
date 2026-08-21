@@ -11,6 +11,23 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-21 — Nextcloud Deck: fix instruction conflict causing missed stack moves
+
+The `nextcloud` subagent's own instructions contradicted each other: "Vorgehen"
+said to follow the deck-workflow skill's stack conventions even when the
+delegation order didn't repeat them, but "Grenzen" separately forbade moving
+any card not named in the order — read literally, that blocked the very moves
+the workflow skill calls for on the card actually being worked. In practice
+this meant cards sometimes stayed in Doing after producing something to review,
+or stayed in Review/Done after a new open item was added to them. Reworded the
+Grenzen bullet so it's explicit: other, unrelated cards are off limits, but the
+card the order is actually working on follows the workflow skill's stack rules
+regardless. Also added an explicit reopening rule to the `nextcloud-deck-workflow`
+skill itself — a card in Review or Done with a fresh unresolved item attached
+moves back to Doing as part of the same action, since the skill previously had
+no rule at all for that case.
+vibecoded with Claude Sonnet 5
+
 ## 2026-08-21 — DokuWiki: link every newly created page from an existing page
 
 New wiki pages were reachable only by direct URL or search until a human

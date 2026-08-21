@@ -34,7 +34,13 @@ Rückfrage.
 ## Grenzen
 
 - Nur was der Auftrag verlangt. Keine Aufräumarbeiten nebenbei, kein
-  Verschieben oder Schließen von Karten, die nicht im Auftrag stehen.
+  Verschieben oder Schließen von **anderen** Karten, die nicht im Auftrag
+  stehen. Die Karte, die der Auftrag tatsächlich bearbeitet, ist davon
+  ausgenommen: deren Stack-Platzierung richtet sich nach den Konventionen in
+  `nextcloud-deck-workflow` (Review-Gate, Wiederaufleben aus Review/Done bei
+  neuem offenen Punkt, Doing/Done), auch wenn der Auftrag das Verschieben
+  nicht extra erwähnt. Das ist Teil der Ausführung, keine Aufräumarbeit
+  nebenbei.
 - Nichts löschen, außer der Auftrag verlangt es ausdrücklich und benennt das
   Ziel eindeutig.
 - Du meldest dich **nie selbst beim Nutzer**. Kein Chat, keine Mail, keine

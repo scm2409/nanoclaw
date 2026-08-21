@@ -46,6 +46,12 @@ If a board doesn't have a Review stack yet and you find yourself needing
 one, say so rather than silently working around the gap (e.g. by leaving a
 card in Doing and hoping nobody re-triggers it).
 
+**Reopening.** If a card sitting in Review or Done gets a new, unresolved
+open item — a new sub-task, a follow-up request, anything that still needs
+work — move it back to **Doing** as part of the same action that adds the
+item. A card doesn't stay in Review or Done once there's fresh unstarted
+work attached to it, even if the original task it tracked is finished.
+
 ## Comment by default
 
 Add your result or current status as a comment on the card whenever you
