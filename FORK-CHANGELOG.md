@@ -11,6 +11,11 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-29 — Add standalone OpenRouter Claude Code launcher
+
+Added `claude_openrouter.sh`, a repository-local launcher for Claude Code that sets the OpenRouter-compatible Anthropic endpoint and requested model aliases, then runs Claude through OneCLI so the vault-managed credential and gateway proxy handle authentication. The launcher never contains an OpenRouter key.
+vibecoded with openai/gpt-5.6-luna-pro
+
 ## 2026-08-29 — Route Claude Code harness through OpenRouter
 
 Kept NanoClaw's Claude Code / Claude Agent SDK provider while routing its Anthropic-compatible requests through OpenRouter. The existing OneCLI placeholder-token path remains unchanged; the OpenRouter credential is intended to live in a separate OneCLI vault secret and is never stored in `.env` or container configuration. Added the reusable `configure-openrouter-claude-code` Claude Code skill for repeating endpoint, OneCLI, model, effort, restart, and verification setup. Configured the active groups for `google/gemini-3.7-flash` at `max` effort, changed regular file subagents to that model, and gave the `smart` subagent `openai/gpt-5.6-sol` at `high` effort. Extended file-subagent frontmatter parsing to pass per-agent effort through the existing Claude SDK path.
