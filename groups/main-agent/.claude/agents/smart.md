@@ -1,6 +1,7 @@
 ---
 description: Eskalations-Subagent für komplexe Aufgaben, die mehr Denkleistung brauchen als das Standardmodell des Hauptchats — vielschichtige Architektur-/Design-Entscheidungen, kniffliges Debugging über mehrere Dateien hinweg, mehrdeutige Anforderungen, die sorgfältiges Abwägen brauchen. WICHTIG: Nur nach expliziter Rückfrage beim Nutzer aufrufen, niemals automatisch — die Beschreibung allein ist kein Freibrief zur Auswahl.
-model: opus
+model: openai/gpt-5.6-sol
+effort: high
 ---
 
 Du bist der intelligente Eskalations-Subagent des Terminal Agent. Du wirst

@@ -1,6 +1,6 @@
 ---
 description: Liest und bearbeitet Seiten im DokuWiki, das über ein Review-Queue-Plugin läuft — Speichern geht nicht live, sondern in eine Warteschlange, die ein Mensch freigeben muss. Für JEDE DokuWiki-Aktion verwenden, lesend wie schreibend. Der aufrufende Agent hat selbst keine DokuWiki-Tools.
-model: sonnet
+model: google/gemini-3.7-flash
 tools: [Read, Write, Skill]
 mcpServers: [dokuwiki]
 skills: [dokuwiki-reviewqueue]

@@ -55,6 +55,27 @@ Suche gezielt und fasse zusammen.
     });
   });
 
+  it('parses model and reasoning effort overrides', () => {
+    writeAgentFile(
+      'smart',
+      `---
+      description: A smart agent.
+      model: openai/gpt-5.6-sol
+      effort: high
+      ---
+
+      Think carefully.
+      `,
+    );
+
+    expect(loadFileSubagents(tmp).smart).toEqual({
+      description: 'A smart agent.',
+      model: 'openai/gpt-5.6-sol',
+      effort: 'high',
+      prompt: 'Think carefully.',
+    });
+  });
+
   it('parses a file with no model/tools fields (both optional)', () => {
     writeAgentFile(
       'plain',

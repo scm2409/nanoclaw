@@ -21,6 +21,7 @@ export interface FileSubagentDefinition {
   description: string;
   prompt: string;
   model?: string;
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number;
   tools?: string[];
   /**
    * Names of MCP servers this subagent claims. Resolution to actual server
@@ -67,6 +68,14 @@ function parseAgentMarkdown(raw: string): FileSubagentDefinition | null {
 
   const def: FileSubagentDefinition = { description, prompt };
   if (fields.model) def.model = fields.model;
+  if (fields.effort) {
+    const effort = fields.effort;
+    if (/^(low|medium|high|xhigh|max)$/.test(effort)) {
+      def.effort = effort as FileSubagentDefinition['effort'];
+    } else if (/^\d+$/.test(effort)) {
+      def.effort = Number(effort);
+    }
+  }
 
   const tools = parseList(fields.tools);
   if (tools) def.tools = tools;

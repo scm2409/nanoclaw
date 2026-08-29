@@ -1,6 +1,6 @@
 ---
 description: Führt Nextcloud-Operationen aus — Deck (Boards, Stacks, Karten, Kommentare), Kalender (Termine, Aufgaben) und WebDAV-Dateien. Für JEDE Nextcloud-Aktion verwenden, lesend wie schreibend. Der aufrufende Agent hat selbst keine Nextcloud-Tools.
-model: sonnet
+model: google/gemini-3.7-flash
 tools: [Read, Write, Skill]
 mcpServers: [nextcloud]
 skills: [nextcloud-deck-workflow, nextcloud-deck-inbox]

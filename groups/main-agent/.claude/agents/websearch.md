@@ -1,6 +1,6 @@
 ---
 description: Recherchiert im Web und liefert eine verdichtete, belegte Zusammenfassung zurück. Für JEDE Internet-Recherche verwenden — Nachrichten, Fakten-Checks, Produktinfos, Dokumentation, aktuelle Ereignisse. Auch für mehrteilige Recherchen ("vergleiche X und Y", "was ist der Stand zu Z").
-model: sonnet
+model: google/gemini-3.7-flash
 tools: [WebSearch, WebFetch]
 ---
 
