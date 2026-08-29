@@ -658,6 +658,7 @@ export class ClaudeProvider implements AgentProvider {
 
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
+      let lastAssistantText: string | null = null;
       for await (const message of sdkResult) {
         if (aborted) return;
         messageCount++;
@@ -667,6 +668,21 @@ export class ClaudeProvider implements AgentProvider {
 
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };
+        } else if (message.type === 'assistant') {
+          const content = (message as { message?: { content?: unknown[] } }).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (
+                block &&
+                typeof block === 'object' &&
+                (block as { type?: string }).type === 'text' &&
+                typeof (block as { text?: unknown }).text === 'string' &&
+                (block as { text: string }).text.trim().length > 0
+              ) {
+                lastAssistantText = (block as { text: string }).text;
+              }
+            }
+          }
         } else if (message.type === 'result') {
           // `result` text exists only on subtype:"success"; error subtypes
           // (e.g. a non-retryable 403 billing_error) carry their message in
@@ -678,7 +694,11 @@ export class ClaudeProvider implements AgentProvider {
             errors?: string[];
             modelUsage?: Record<string, ModelUsage>;
           };
-          const text = m.result ?? (m.errors && m.errors.length > 0 ? m.errors.join('\n') : null);
+          const resultText = typeof m.result === 'string' && m.result.trim().length > 0 ? m.result : null;
+          const errorText = m.errors && m.errors.length > 0 ? m.errors.join('\n') : null;
+          const text = resultText ?? errorText ?? (m.is_error === true ? null : lastAssistantText);
+
+          if (m.is_error !== true) lastAssistantText = null;
           yield { type: 'result', text, isError: m.is_error === true, modelUsage: m.modelUsage };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };

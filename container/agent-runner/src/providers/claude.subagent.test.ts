@@ -113,6 +113,60 @@ describe('task_started subagent translation', () => {
   });
 });
 
+describe('result text fallback', () => {
+  it('uses the last assistant text when a successful result has no result text', async () => {
+    sdkMessages.length = 0;
+    supportedAgentsResult = [];
+    sdkMessages.push(
+      { type: 'system', subtype: 'init', session_id: 'sess-1' },
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: '<message to="user">verified</message>' }],
+        },
+      },
+      { type: 'result', subtype: 'success', result: null },
+    );
+
+    const provider = new ClaudeProvider({});
+    provider.registerMemorySessionHook(MEMORY_SESSION_HOOK);
+    const q = provider.query({ prompt: 'hi', cwd: tmp });
+
+    const events: { type: string; text?: string | null }[] = [];
+    for await (const e of q.events) events.push(e as { type: string; text?: string | null });
+
+    expect(events.find((e) => e.type === 'result')).toEqual({
+      type: 'result',
+      text: '<message to="user">verified</message>',
+      isError: false,
+      modelUsage: undefined,
+    });
+  });
+
+  it('keeps a genuinely textless successful result empty', async () => {
+    sdkMessages.length = 0;
+    supportedAgentsResult = [];
+    sdkMessages.push(
+      { type: 'system', subtype: 'init', session_id: 'sess-1' },
+      { type: 'result', subtype: 'success', result: null },
+    );
+
+    const provider = new ClaudeProvider({});
+    provider.registerMemorySessionHook(MEMORY_SESSION_HOOK);
+    const q = provider.query({ prompt: 'hi', cwd: tmp });
+
+    const events: { type: string; text?: string | null }[] = [];
+    for await (const e of q.events) events.push(e as { type: string; text?: string | null });
+
+    expect(events.find((e) => e.type === 'result')).toEqual({
+      type: 'result',
+      text: null,
+      isError: false,
+      modelUsage: undefined,
+    });
+  });
+});
+
 describe('result modelUsage translation', () => {
   it('passes the SDK result message\'s modelUsage through unchanged on the result event', async () => {
     sdkMessages.length = 0;

@@ -11,6 +11,16 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-29 — Preserve assistant text after empty SDK results
+
+Fixed the Claude provider's handling of successful SDK result messages whose `result` field is empty even though an earlier assistant message contains the final text. This occurs with some OpenRouter reasoning output orderings and previously caused NanoClaw to log `Result: (empty)` and silently drop the reply. The provider now falls back to the last non-empty assistant text, with regression coverage for both fallback and genuinely textless results. Live verification confirmed a `coder` calculation reached `messages_out` after the fix.
+vibecoded with openai/gpt-5.6-luna-pro
+
+## 2026-08-29 — Add generic coding subagent skill
+
+Added `.claude/skills/add-coding-subagent`, which installs a reusable `coder` file subagent for locally verifiable calculations, executable scripts, tests, and focused workspace coding. The bundled definition uses OpenRouter model `z-ai/glm-5.3-flash`, confines work to explicitly authorized paths, defaults to read-only, and requires `edit: allowed` for explicit coding edits; once that flag is present, it edits without another confirmation. It enforces a one-week dependency release-age gate, allowing only configured `uv`, `pnpm`, Yarn, or Bun workflows and rejecting unconfigured or bypassed package managers. It distinguishes ephemeral, shared, and persistent project workspaces and forbids unrequested external side effects. It relies on NanoClaw's existing file-subagent loader and persistent group workspace, so no host-code or database changes are needed.
+vibecoded with openai/gpt-5.6-luna-pro
+
 ## 2026-08-29 — Add standalone OpenRouter Claude Code launcher
 
 Added `claude_openrouter.sh`, a repository-local launcher for Claude Code that sets the OpenRouter-compatible Anthropic endpoint and requested model aliases, then runs Claude through OneCLI so the vault-managed credential and gateway proxy handle authentication. The launcher never contains an OpenRouter key.
