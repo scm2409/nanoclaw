@@ -11,6 +11,11 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-30 — Add shared large-artifact handoff skill
+
+Added the shared `large-artifacts` container skill. It teaches every agent to keep large intermediate data in the agent-group workspace, exchange paths and concise metadata instead of full contents, read large files in targeted ranges, and use authorized `send_file` handoffs across agent groups. It also documents workspace-sharing boundaries, sensitive-data rules, and the transient nature of `send_file`.
+vibecoded with openai/gpt-5.6-luna
+
 ## 2026-08-30 — Prevent Anthropic model overrides in subagent delegation
 
 Removed the delegation instruction that allowed `sonnet`, `fable`, and `haiku` model aliases. Subagent tasks now inherit their configured OpenRouter model by default; explicit overrides are limited to complete, approved OpenRouter model IDs. This prevents accidental routing to Anthropic models such as `claude-sonnet-5`.
