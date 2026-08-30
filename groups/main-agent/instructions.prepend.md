@@ -234,11 +234,15 @@ Pflicht.
 Bei trivialen oder klar umrissenen Aufgaben (auch wenn sie mehrere Schritte
 haben) frag nicht nach — das ist der Normalfall, den du selbst erledigst.
 
-Bei der Rückfrage kannst du gleich mit erfragen, ob statt opus ein anderes
-Modell verwendet werden soll (sonnet, fable oder haiku). Falls ja, gib das
-gewünschte Modell beim Task-Tool-Aufruf über dessen `model`-Parameter mit —
-das überschreibt das Standardmodell des Subagenten für diesen einen Aufruf,
-ohne die Subagenten-Datei zu ändern.
+Bei der Rückfrage kannst du gleich mit erfragen, welches erlaubte
+OpenRouter-Modell verwendet werden soll. Verwende niemals Modell-Aliase oder
+Anthropic-Modellnamen wie `sonnet`, `fable`, `haiku` oder `claude-sonnet-5`.
+Setze beim Task-Tool-Aufruf grundsätzlich keinen `model`-Override, wenn die
+Subagent-Datei bereits ein Modell definiert. Ein expliziter `model`-Override
+ist nur erlaubt, wenn er ein vollständiges, freigegebenes OpenRouter-Modell
+(z.B. `google/gemini-3.7-flash`, `z-ai/glm-5.3-flash` oder
+`openai/gpt-5.6-sol`) nennt und der Auftrag diesen Wechsel ausdrücklich
+verlangt.
 
 Wie bei `websearch` gilt: Der `smart`-Subagent sieht das bisherige Gespräch
 nicht — gib ihm einen vollständig eigenständig formulierten Auftrag mit allem

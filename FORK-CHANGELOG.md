@@ -11,6 +11,11 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-30 — Prevent Anthropic model overrides in subagent delegation
+
+Removed the delegation instruction that allowed `sonnet`, `fable`, and `haiku` model aliases. Subagent tasks now inherit their configured OpenRouter model by default; explicit overrides are limited to complete, approved OpenRouter model IDs. This prevents accidental routing to Anthropic models such as `claude-sonnet-5`.
+vibecoded with openai/gpt-5.6-luna-pro
+
 ## 2026-08-29 — Preserve assistant text after empty SDK results
 
 Fixed the Claude provider's handling of successful SDK result messages whose `result` field is empty even though an earlier assistant message contains the final text. This occurs with some OpenRouter reasoning output orderings and previously caused NanoClaw to log `Result: (empty)` and silently drop the reply. The provider now falls back to the last non-empty assistant text, with regression coverage for both fallback and genuinely textless results. Live verification confirmed a `coder` calculation reached `messages_out` after the fix.
