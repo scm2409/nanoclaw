@@ -691,8 +691,14 @@ describe('subagent logging notice', () => {
 type UsageMap = NonNullable<Extract<ProviderEvent, { type: 'result' }>['modelUsage']>;
 
 /** Per-model usage totals in the shape the SDK reports them. */
-function usage(inputTokens: number, outputTokens: number, cacheReadInputTokens: number, costUSD: number) {
-  return { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens: 0, costUSD };
+function usage(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadInputTokens: number,
+  costUSD: number,
+  cacheCreationInputTokens = 0,
+) {
+  return { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD };
 }
 
 const DEFAULT_USAGE: UsageMap = {
@@ -721,16 +727,24 @@ function makeTokenUsageQuery(modelUsage: UsageMap = DEFAULT_USAGE): { query: Age
 }
 
 describe('token usage notice', () => {
-  it('delivers a chat notice summarizing tokens and cost per model when showTokenUsage is on', async () => {
-    const { query, pushes } = makeTokenUsageQuery();
+  it('delivers separate token counters without provider-specific pricing', async () => {
+    const { query, pushes } = makeTokenUsageQuery({
+      sonnet: usage(1000, 200, 50, 0.08, 600),
+      haiku: usage(300, 100, 0, 0.01, 25),
+    });
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined, false, true);
 
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     const text = JSON.parse(out[0].content).text as string;
-    expect(text).toContain('sonnet: 1,250 ($0.08)');
-    expect(text).toContain('haiku: 400 ($0.01)');
+    expect(text).toContain('sonnet: input 1,000 · cache read 50 · cache creation 600 · output 200');
+    expect(text).toContain('haiku: input 300 · cache read 0 · cache creation 25 · output 100');
+    expect(text).not.toContain('$0.08');
+    expect(text).not.toContain('$0.01');
+    expect(text).not.toContain('1,850');
+    expect(text).not.toContain('425');
+
     expect(out[0].platform_id).toBe('chan-1');
     // Marked as a diagnostic, not ordinary chat: the host suppresses these on
     // channels that declare they don't carry notices (email). Falling back to
@@ -774,7 +788,7 @@ describe('token usage notice', () => {
     const text = await runTurn({ sonnet: usage(1000, 260, 8050, 0.11) });
 
     // 1,250 -> 9,310 cumulative: the turn itself was 8,060 tokens and $0.03.
-    expect(text).toContain('sonnet: 8,060 ($0.03)');
+    expect(text).toContain('sonnet: input 0 · cache read 8,000 · cache creation 0 · output 60');
     expect(text).not.toContain('9,310');
   });
 
@@ -785,8 +799,10 @@ describe('token usage notice', () => {
       haiku: usage(4000, 500, 0, 0.02),
     });
 
-    expect(text).toContain('sonnet: 100 ($0.01)');
-    expect(text).toContain('haiku: 4,500 ($0.02)');
+    expect(text).toContain('sonnet: input 0 · cache read 0 · cache creation 0 · output 100');
+    expect(text).toContain('haiku: input 4,000 · cache read 0 · cache creation 0 · output 500');
+    expect(text).not.toContain('$0.01');
+    expect(text).not.toContain('$0.02');
   });
 
   it('treats a counter that went backwards as a fresh session', async () => {
@@ -794,7 +810,8 @@ describe('token usage notice', () => {
     // Container restarted: the SDK's totals start over from this turn's own usage.
     const text = await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
 
-    expect(text).toContain('sonnet: 1,250 ($0.08)');
+    expect(text).toContain('sonnet: input 1,000 · cache read 50 · cache creation 0 · output 200');
+    expect(text).not.toContain('$0.08');
   });
 
   it('says nothing when the turn consumed nothing', async () => {
@@ -840,9 +857,9 @@ const TASK_ROUTING = {
 
 function taskLogRows(): Array<{ text: string }> {
   return (
-    getOutboundDb()
-      .prepare("SELECT content FROM messages_out WHERE kind = 'task_log' ORDER BY seq")
-      .all() as Array<{ content: string }>
+    getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'task_log' ORDER BY seq").all() as Array<{
+      content: string;
+    }>
   ).map((r) => JSON.parse(r.content) as { text: string });
 }
 

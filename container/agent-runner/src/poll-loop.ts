@@ -138,8 +138,8 @@ export interface PollLoopConfig {
   logSubagents?: boolean;
   /**
    * When true, delivers a short chat notice ("📊 Tokens: ...") after each
-   * completed turn, summing tokens and USD cost per model used during that
-   * turn (main model + any subagents) — same side-channel write straight to
+   * completed turn, reporting input, cache-read, cache-creation, and output
+   * tokens per model used during that turn (main model + any subagents) — same side-channel write straight to
    * messages_out as `logSubagents`, never pushed into the agent's own SDK
    * stream. Off by default; toggled via container.json (`ncl groups config
    * update --show-token-usage true`).
@@ -793,7 +793,17 @@ function deliverSubagentNotice(
  * can be reported as a difference. Process-global on purpose: the SDK's
  * counter is process-global too, and a turn is one `processQuery` call.
  */
-let tokenUsageBaseline: Record<string, { tokens: number; costUSD: number }> = {};
+let tokenUsageBaseline: Record<
+  string,
+  {
+    tokens: number;
+    costUSD: number;
+    inputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+    outputTokens: number;
+  }
+> = {};
 
 /** Drop the baseline. Tests only — the process never needs to forget. */
 export function resetTokenUsageBaseline(): void {
@@ -808,10 +818,10 @@ export function resetTokenUsageBaseline(): void {
  *
  * The SDK's `modelUsage` is a **running total for the whole session**, not for
  * this turn: it accumulates over every API call the process makes and is
- * restored on resume. Reporting it verbatim made a one-word reply read as 1.4M
- * tokens. So each model is reported as the difference against the previous
- * turn. A total that went backwards means the SDK session started over (fresh
- * container), in which case the current value *is* the turn's usage.
+ * restored on resume. Each model is therefore reported as four counter
+ * differences against the previous turn. A counter going backwards means the
+ * SDK session started over (fresh container), in which case current values are
+ * this turn's usage.
  *
  * Subagents are covered without any extra work: their usage lands in
  * `modelUsage` under the model they ran on, so a subagent-only model shows up
@@ -820,7 +830,13 @@ export function resetTokenUsageBaseline(): void {
 function deliverTokenUsageNotice(
   modelUsage: Record<
     string,
-    { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number; costUSD: number }
+    {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens: number;
+      cacheCreationInputTokens: number;
+      costUSD: number;
+    }
   >,
   routing: RoutingContext,
 ): void {
@@ -829,12 +845,31 @@ function deliverTokenUsageNotice(
   for (const [model, u] of Object.entries(modelUsage)) {
     const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
     const previous = tokenUsageBaseline[model];
-    const restarted = previous !== undefined && total < previous.tokens;
-    const tokens = previous && !restarted ? total - previous.tokens : total;
-    const costUSD = previous && !restarted ? u.costUSD - previous.costUSD : u.costUSD;
-    tokenUsageBaseline[model] = { tokens: total, costUSD: u.costUSD };
-    if (tokens <= 0) continue;
-    lines.push(`${model}: ${tokens.toLocaleString()} ($${costUSD.toFixed(2)})`);
+    const restarted =
+      previous !== undefined &&
+      (u.inputTokens < previous.inputTokens ||
+        u.cacheReadInputTokens < previous.cacheReadInputTokens ||
+        u.cacheCreationInputTokens < previous.cacheCreationInputTokens ||
+        u.outputTokens < previous.outputTokens);
+    const delta = (current: number, previousValue: number | undefined): number =>
+      previous && !restarted ? current - previousValue! : current;
+    const inputTokens = delta(u.inputTokens, previous?.inputTokens);
+    const cacheReadInputTokens = delta(u.cacheReadInputTokens, previous?.cacheReadInputTokens);
+    const cacheCreationInputTokens = delta(u.cacheCreationInputTokens, previous?.cacheCreationInputTokens);
+    const outputTokens = delta(u.outputTokens, previous?.outputTokens);
+    tokenUsageBaseline[model] = {
+      tokens: total,
+      costUSD: u.costUSD,
+      inputTokens: u.inputTokens,
+      cacheReadInputTokens: u.cacheReadInputTokens,
+      cacheCreationInputTokens: u.cacheCreationInputTokens,
+      outputTokens: u.outputTokens,
+    };
+    if (inputTokens + cacheReadInputTokens + cacheCreationInputTokens + outputTokens <= 0) continue;
+    lines.push(
+      `${model}: input ${inputTokens.toLocaleString()} · cache read ${cacheReadInputTokens.toLocaleString()} · ` +
+        `cache creation ${cacheCreationInputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}`,
+    );
   }
   // Nothing consumed (or nothing reported) — stay quiet rather than deliver a
   // bare "📊 Tokens:" with no numbers behind it.

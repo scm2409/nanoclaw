@@ -11,6 +11,11 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-30 — Show token usage by category
+
+Changed the optional token notice to report input, cache-read, cache-creation, and output counters separately instead of adding cache fields into a misleading total. Removed provider-dependent USD pricing from the user-facing notice while retaining provider-neutral usage handling and cumulative-session baseline tracking.
+vibecoded with openai/gpt-5.6-luna
+
 ## 2026-08-30 — Add shared large-artifact handoff skill
 
 Added the shared `large-artifacts` container skill. It teaches every agent to keep large intermediate data in the agent-group workspace, exchange paths and concise metadata instead of full contents, read large files in targeted ranges, and use authorized `send_file` handoffs across agent groups. It also documents workspace-sharing boundaries, sensitive-data rules, and the transient nature of `send_file`.
