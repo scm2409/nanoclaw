@@ -18,9 +18,9 @@ function continuationKey(providerName: string): string {
 }
 
 function getValue(key: string): string | undefined {
-  const row = getOutboundDb()
-    .prepare('SELECT value FROM session_state WHERE key = ?')
-    .get(key) as { value: string } | undefined;
+  const row = getOutboundDb().prepare('SELECT value FROM session_state WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined;
   return row?.value;
 }
 
@@ -76,6 +76,46 @@ export function setContinuation(providerName: string, id: string): void {
 
 export function clearContinuation(providerName: string): void {
   deleteValue(continuationKey(providerName));
+}
+
+/**
+ * Cumulative per-model token counters last seen from the provider, persisted
+ * so the `📊 Tokens` notice can still report a per-turn *difference* after a
+ * container restart. The SDK's `modelUsage` is a session-lifetime running
+ * total that is restored on resume; without a persisted baseline every
+ * fresh-container turn subtracts against zero and re-prints the whole
+ * session's history (including buckets for a model the group no longer runs,
+ * e.g. a `claude-sonnet-5` total left over from before a model switch).
+ */
+const TOKEN_USAGE_BASELINE_KEY = 'token_usage_baseline';
+
+export interface TokenUsageBaselineEntry {
+  tokens: number;
+  costUSD: number;
+  inputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  outputTokens: number;
+}
+
+export function getTokenUsageBaseline(): Record<string, TokenUsageBaselineEntry> {
+  const raw = getValue(TOKEN_USAGE_BASELINE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, TokenUsageBaselineEntry>;
+  } catch {
+    return {};
+  }
+}
+
+export function setTokenUsageBaseline(baseline: Record<string, TokenUsageBaselineEntry>): void {
+  setValue(TOKEN_USAGE_BASELINE_KEY, JSON.stringify(baseline));
+}
+
+export function clearTokenUsageBaseline(): void {
+  deleteValue(TOKEN_USAGE_BASELINE_KEY);
 }
 
 /**

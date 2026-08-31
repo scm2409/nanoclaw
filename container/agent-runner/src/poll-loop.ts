@@ -11,9 +11,13 @@ import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/con
 import {
   clearContinuation,
   clearCurrentInReplyTo,
+  clearTokenUsageBaseline,
+  getTokenUsageBaseline,
   migrateLegacyContinuation,
   setContinuation,
   setCurrentInReplyTo,
+  setTokenUsageBaseline,
+  type TokenUsageBaselineEntry,
 } from './db/session-state.js';
 import {
   formatMessages,
@@ -790,24 +794,28 @@ function deliverSubagentNotice(
 
 /**
  * Last cumulative per-model totals seen from the provider, so the next turn
- * can be reported as a difference. Process-global on purpose: the SDK's
- * counter is process-global too, and a turn is one `processQuery` call.
+ * can be reported as a difference. `null` means "not yet loaded this process"
+ * — the first notice hydrates it from outbound.db (`token_usage_baseline`) so
+ * the difference survives a container restart. The SDK's `modelUsage` is a
+ * session-lifetime running total restored on resume, so without the persisted
+ * baseline every fresh-container turn would subtract against zero and re-print
+ * the whole session history.
  */
-let tokenUsageBaseline: Record<
-  string,
-  {
-    tokens: number;
-    costUSD: number;
-    inputTokens: number;
-    cacheReadInputTokens: number;
-    cacheCreationInputTokens: number;
-    outputTokens: number;
-  }
-> = {};
+let tokenUsageBaseline: Record<string, TokenUsageBaselineEntry> | null = null;
 
-/** Drop the baseline. Tests only — the process never needs to forget. */
+/** Drop the baseline (module + persisted). Tests only. */
 export function resetTokenUsageBaseline(): void {
   tokenUsageBaseline = {};
+  try {
+    clearTokenUsageBaseline();
+  } catch {
+    // No session DB open (unit tests that never init one) — nothing to clear.
+  }
+}
+
+/** Force a reload from the DB on the next notice, as a real restart would. Tests only. */
+export function reloadTokenUsageBaselineForTests(): void {
+  tokenUsageBaseline = null;
 }
 
 /**
@@ -841,10 +849,13 @@ function deliverTokenUsageNotice(
   routing: RoutingContext,
 ): void {
   if (isAgentToAgentRoute(routing)) return;
+  // Hydrate once per process from the persisted baseline so the per-turn
+  // difference survives a container restart (see tokenUsageBaseline above).
+  const baseline = tokenUsageBaseline ?? (tokenUsageBaseline = getTokenUsageBaseline());
   const lines: string[] = [];
   for (const [model, u] of Object.entries(modelUsage)) {
     const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
-    const previous = tokenUsageBaseline[model];
+    const previous = baseline[model];
     const restarted =
       previous !== undefined &&
       (u.inputTokens < previous.inputTokens ||
@@ -857,7 +868,7 @@ function deliverTokenUsageNotice(
     const cacheReadInputTokens = delta(u.cacheReadInputTokens, previous?.cacheReadInputTokens);
     const cacheCreationInputTokens = delta(u.cacheCreationInputTokens, previous?.cacheCreationInputTokens);
     const outputTokens = delta(u.outputTokens, previous?.outputTokens);
-    tokenUsageBaseline[model] = {
+    baseline[model] = {
       tokens: total,
       costUSD: u.costUSD,
       inputTokens: u.inputTokens,
@@ -871,6 +882,9 @@ function deliverTokenUsageNotice(
         `cache creation ${cacheCreationInputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}`,
     );
   }
+  // Persist the advanced counters even when nothing is reported this turn, so
+  // the next process starts from the right place.
+  setTokenUsageBaseline(baseline);
   // Nothing consumed (or nothing reported) — stay quiet rather than deliver a
   // bare "📊 Tokens:" with no numbers behind it.
   if (lines.length === 0) return;

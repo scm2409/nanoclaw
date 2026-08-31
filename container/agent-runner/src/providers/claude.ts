@@ -201,6 +201,44 @@ function buildAgentDefinitions(
   return agents;
 }
 
+/** Fixed target for the `fable` alias — no subagent tier maps to it. */
+const FABLE_ALIAS_MODEL = 'moonshotai/kimi-k3';
+
+/**
+ * Pin the Claude Code model aliases (`sonnet` / `haiku` / `opus` / `fable`) to
+ * models this group already runs.
+ *
+ * Even with an explicit main model and explicit per-subagent models, the
+ * harness still makes internal calls addressed by alias — conversation-title
+ * and "new topic" detection, PreCompact summaries, plan mode, the built-in
+ * Task agent types. With no remap those aliases resolve to the real Anthropic
+ * model IDs; behind an OpenRouter-style proxy that is a live, billed call to a
+ * model the operator never chose.
+ *
+ *   sonnet -> the group's main model
+ *   haiku  -> the `coder` subagent's model  (cheap/fast tier)
+ *   opus   -> the `smart` subagent's model  (escalation tier)
+ *   fable  -> a fixed cheap slug
+ *
+ * Only applied when the main model is a `vendor/slug` (i.e. not a bare
+ * Anthropic alias or `claude-*` id) — a stock Anthropic install is left
+ * untouched, since remapping an alias onto itself is pointless and recursive.
+ */
+export function buildModelAliasEnv(mainModel: string | undefined, cwd: string): Record<string, string> {
+  if (!mainModel || !mainModel.includes('/')) return {};
+  const subagents = loadFileSubagents(cwd);
+  const asModel = (v: unknown): string | undefined => (typeof v === 'string' && v.includes('/') ? v : undefined);
+  const haiku = asModel(subagents.coder?.model) ?? mainModel;
+  const opus = asModel(subagents.smart?.model) ?? mainModel;
+  return {
+    ANTHROPIC_DEFAULT_SONNET_MODEL: mainModel,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku,
+    ANTHROPIC_SMALL_FAST_MODEL: haiku,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: opus,
+    ANTHROPIC_DEFAULT_FABLE_MODEL: FABLE_ALIAS_MODEL,
+  };
+}
+
 interface SDKUserMessage {
   type: 'user';
   message: { role: 'user'; content: string };
@@ -617,6 +655,11 @@ export class ClaudeProvider implements AgentProvider {
     // websearch.md) is silently unusable via the Task tool.
     const fileSubagents = buildAgentDefinitions(input.cwd, this.mcpServers);
 
+    // Pin the harness's model aliases to models this group already runs, so an
+    // internal alias-addressed call can't leak to a real Anthropic model
+    // through the proxy.
+    const aliasEnv = buildModelAliasEnv(this.model, input.cwd);
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
@@ -630,7 +673,7 @@ export class ClaudeProvider implements AgentProvider {
         allowedTools: [...TOOL_ALLOWLIST, ...Object.keys(this.mcpServers).map(mcpAllowPattern)],
         disallowedTools: SDK_DISALLOWED_TOOLS,
         agents: fileSubagents,
-        env: this.env,
+        env: { ...this.env, ...aliasEnv },
         model: this.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         effort: this.effort as any,
@@ -760,7 +803,9 @@ export class ClaudeProvider implements AgentProvider {
                 const agents = await sdkResult.supportedAgents();
                 for (const a of agents) agentModels.set(a.name, a.model || mainModel || 'inherit');
               } catch (err) {
-                log(`supportedAgents() failed, falling back to 'inherit': ${err instanceof Error ? err.message : String(err)}`);
+                log(
+                  `supportedAgents() failed, falling back to 'inherit': ${err instanceof Error ? err.message : String(err)}`,
+                );
               }
             }
             const models = agentModels;

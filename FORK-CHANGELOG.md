@@ -11,6 +11,32 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-31 — Pin Claude Code model aliases and persist the token baseline
+
+Fixed a leak where a group running on a non-Anthropic main model (e.g. an
+OpenRouter `vendor/slug`) still produced real, billed `claude-sonnet-5` /
+`claude-haiku-*` calls. The Claude Code harness makes internal calls addressed
+by the `sonnet` / `haiku` / `opus` / `fable` alias — conversation-title and
+new-topic detection, PreCompact summaries, plan mode, built-in Task agent
+types — and with no alias remap those resolved to real Anthropic IDs through
+the credential proxy. `container/agent-runner/src/providers/claude.ts` now
+builds an alias env from the group's own config whenever the main model is a
+`vendor/slug`: `sonnet` follows the main model, `haiku` (and
+`ANTHROPIC_SMALL_FAST_MODEL`) follow the `coder` subagent's model, `opus`
+follows the `smart` subagent's model, and `fable` is pinned to
+`moonshotai/kimi-k3`. A stock Anthropic install is untouched.
+
+Also made the `📊 Tokens` notice baseline (`tokenUsageBaseline` in
+`poll-loop.ts`) persist to `outbound.db` session state. The SDK's `modelUsage`
+is a session-lifetime running total restored on resume; the baseline was
+process-global, so every fresh `--rm` container re-subtracted against zero and
+re-printed the whole session history — including a stale `claude-sonnet-5`
+bucket left over from before a model switch. The baseline now hydrates once per
+process from the DB and is written back each turn, so the per-turn difference
+is correct across restarts.
+
+vibecoded with (model name unavailable this session)
+
 ## 2026-08-30 — Teach DokuWiki subagent large-page API
 
 Updated DokuWiki review-queue instructions for API version 12. The subagent now uses outline, section, line-range, contextual-search, hash-checked targeted-write, pending-draft update, and pending-withdraw tools for large pages instead of forcing whole-page MCP responses. Updated installer guidance and synchronized both container skill copies. Bumped the pinned `mcp-remote` bridge from 0.1.38 to the latest seven-day-compliant 0.1.45 release.

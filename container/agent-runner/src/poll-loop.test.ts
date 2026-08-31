@@ -4,7 +4,12 @@ import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '
 import { getPendingMessages, markCompleted, markProcessing } from './db/messages-in.js';
 import { getUndeliveredMessages } from './db/messages-out.js';
 import { formatMessages, extractRouting } from './formatter.js';
-import { isCorruptionError, processQuery, resetTokenUsageBaseline } from './poll-loop.js';
+import {
+  isCorruptionError,
+  processQuery,
+  reloadTokenUsageBaselineForTests,
+  resetTokenUsageBaseline,
+} from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import { sendMessage } from './mcp-tools/core.js';
 import { setCurrentInReplyTo } from './db/session-state.js';
@@ -223,7 +228,13 @@ describe('origin metadata (from= attribute)', () => {
       .run(name, name, channelType, platformId);
   }
 
-  function insertWithRouting(id: string, kind: string, content: object, channelType: string | null, platformId: string | null): void {
+  function insertWithRouting(
+    id: string,
+    kind: string,
+    content: object,
+    channelType: string | null,
+    platformId: string | null,
+  ): void {
     getInboundDb()
       .prepare(
         `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, content)
@@ -475,7 +486,8 @@ describe('error result with no <message> envelope', () => {
     // every single one — 180+ duplicate chat messages before the container
     // was killed by hand. The loop must recognize an immediate repeat and
     // stop instead of relaying it forever.
-    const spendCapText = "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage";
+    const spendCapText =
+      "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage";
     const pushes: string[] = [];
     let abortCalls = 0;
     async function* events(): AsyncGenerator<ProviderEvent> {
@@ -523,8 +535,7 @@ describe('duplicate delivery across a same-turn re-wrap retry', () => {
       )
       .run();
 
-    const replyText =
-      'Erster Check: `docker` ist in meinem Container gar nicht installiert (command not found).';
+    const replyText = 'Erster Check: `docker` ist in meinem Container gar nicht installiert (command not found).';
 
     const pushes: string[] = [];
     async function* events(): AsyncGenerator<ProviderEvent> {
@@ -818,6 +829,18 @@ describe('token usage notice', () => {
     await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
 
     expect(await runTurn({ sonnet: usage(1000, 200, 50, 0.08) })).toBeNull();
+  });
+
+  it('keeps subtracting across a container restart via the persisted baseline', async () => {
+    await runTurn({ sonnet: usage(1000, 200, 50, 0.08) });
+    // Fresh container: module baseline gone, but the SDK's modelUsage is
+    // restored on resume as a running total. Without persistence this turn
+    // would re-print the whole 1,250 -> 9,310 history.
+    reloadTokenUsageBaselineForTests();
+    const text = await runTurn({ sonnet: usage(1000, 260, 8050, 0.11) });
+
+    expect(text).toContain('sonnet: input 0 · cache read 8,000 · cache creation 0 · output 60');
+    expect(text).not.toContain('9,310');
   });
 
   it('says nothing when the provider reports no usage at all', async () => {
