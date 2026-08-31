@@ -121,7 +121,11 @@ defeating the whole point of pinning it in `cli-tools.json`.
 
 ## Phase 3: Install the review-queue container skill
 
-The `dokuwiki-reviewqueue` skill teaches whoever holds the tools the save semantics that make this integration safe: a "submitted for review" response is success, not failure, and re-reading a page after saving can silently overwrite your own unreviewed draft. Without it the agent will get this wrong the first time it edits a page.
+The `dokuwiki-reviewqueue` skill teaches whoever holds the tools the save semantics that make this integration safe: a "submitted for review" response is success, not failure, and re-reading a page after saving can silently overwrite your own unreviewed draft. It also teaches API version 12 range reads and targeted writes for large pages. Without it the agent will get this wrong the first time it edits a page.
+
+For large pages, the subagent must call `plugin_reviewqueue_getPageOutline` first, then use `plugin_reviewqueue_getSection`, `plugin_reviewqueue_getLines`, or `plugin_reviewqueue_findInPage` for bounded reads. It must use `source: "auto"` and calculate every write range against the current pending draft, never `core.getPage` live text. Prefer `plugin_reviewqueue_replaceSection`, `plugin_reviewqueue_insertSection`, `plugin_reviewqueue_deleteSection`, `plugin_reviewqueue_replaceLines`, and `plugin_reviewqueue_replaceText`; pass current hashes in `expect`, especially for `replaceLines`. `queued` and `updated` are successful outcomes. Never request or report an entire large page when a range, summary, or workspace path is enough.
+
+The skill source and installed copy must remain identical; update both when changing range or review-queue rules.
 
 ```bash
 cp -r .claude/skills/add-dokuwiki-tool/container-skills/dokuwiki-reviewqueue container/skills/
@@ -198,6 +202,10 @@ docker ps -q --filter 'name=nanoclaw-v2-' | xargs -r docker kill
 ## Phase 6: Verify
 
 Ask the wired group to edit a wiki page. Expected: it delegates to the `dokuwiki` subagent, then reports the change as **submitted for review** (with a change number), not as published. Log in as a reviewer on the wiki and confirm the change is queued with a correct diff. Ask again immediately afterward whether the page was updated — the agent must not re-save or claim it went live; that's the exact failure mode `dokuwiki-reviewqueue` exists to prevent.
+
+Also test a page larger than the agent's message-output limit. Expected: the subagent calls `plugin_reviewqueue_getPageOutline`, reads only needed ranges, uses hash-checked targeted writes, and reports a concise summary or workspace path. It must not paste the entire page into the caller response. Verify that a queued or updated structured result is reported as success and that no stale range is reused after a conflict or status transition.
+
+When delegating large-page work, tell the subagent which section or line range is needed and request a summary rather than a full-page return. The caller must never bypass the subagent to fetch raw page content.
 
 Log signals (`tail -100 logs/nanoclaw.log | grep -iE 'dokuwiki|mcp-remote'`):
 

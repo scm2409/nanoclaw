@@ -24,4 +24,48 @@ describe('container/cli-tools.json installs mcp-remote', () => {
     expect(tool).toBeDefined();
     expect(tool!.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
+
+  it('uses a release compatible with the current DokuWiki MCP API', () => {
+    const tool = cliTools().find((t) => t.name === 'mcp-remote');
+    expect(tool?.version).toBe('0.1.45');
+  });
+});
+
+const rangedTools = [
+  'plugin_reviewqueue_getPageOutline',
+  'plugin_reviewqueue_getSection',
+  'plugin_reviewqueue_getLines',
+  'plugin_reviewqueue_findInPage',
+  'plugin_reviewqueue_searchWithContext',
+  'plugin_reviewqueue_replaceSection',
+  'plugin_reviewqueue_insertSection',
+  'plugin_reviewqueue_deleteSection',
+  'plugin_reviewqueue_replaceLines',
+  'plugin_reviewqueue_replaceText',
+  'plugin_reviewqueue_updatePendingChange',
+  'plugin_reviewqueue_withdrawPendingChange',
+];
+
+describe('DokuWiki large-page guidance', () => {
+  it('documents every ranged read and targeted write tool', () => {
+    const skillFiles = [
+      'container/skills/dokuwiki-reviewqueue/SKILL.md',
+      '.claude/skills/add-dokuwiki-tool/container-skills/dokuwiki-reviewqueue/SKILL.md',
+    ];
+
+    for (const file of skillFiles) {
+      const content = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
+      for (const tool of rangedTools) {
+        expect(content, `${file} missing ${tool}`).toContain(tool);
+      }
+    }
+
+    const agent = fs.readFileSync(
+      path.resolve(process.cwd(), 'groups/main-agent/.claude/agents/dokuwiki.md'),
+      'utf8',
+    );
+    for (const tool of rangedTools) {
+      expect(agent, `subagent guidance missing ${tool}`).toContain(tool);
+    }
+  });
 });

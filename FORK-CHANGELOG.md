@@ -11,6 +11,11 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-30 — Teach DokuWiki subagent large-page API
+
+Updated DokuWiki review-queue instructions for API version 12. The subagent now uses outline, section, line-range, contextual-search, hash-checked targeted-write, pending-draft update, and pending-withdraw tools for large pages instead of forcing whole-page MCP responses. Updated installer guidance and synchronized both container skill copies. Bumped the pinned `mcp-remote` bridge from 0.1.38 to the latest seven-day-compliant 0.1.45 release.
+vibecoded with openai/gpt-5.6-luna
+
 ## 2026-08-30 — Show token usage by category
 
 Changed the optional token notice to report input, cache-read, cache-creation, and output counters separately instead of adding cache fields into a misleading total. Removed provider-dependent USD pricing from the user-facing notice while retaining provider-neutral usage handling and cumulative-session baseline tracking.
