@@ -60,10 +60,7 @@ describe('DokuWiki large-page guidance', () => {
       }
     }
 
-    const agent = fs.readFileSync(
-      path.resolve(process.cwd(), 'groups/main-agent/.claude/agents/dokuwiki.md'),
-      'utf8',
-    );
+    const agent = fs.readFileSync(path.resolve(process.cwd(), 'groups/main-agent/.claude/agents/dokuwiki.md'), 'utf8');
     for (const tool of rangedTools) {
       expect(agent, `subagent guidance missing ${tool}`).toContain(tool);
     }
