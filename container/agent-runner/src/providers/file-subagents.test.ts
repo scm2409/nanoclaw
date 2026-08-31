@@ -58,14 +58,17 @@ Suche gezielt und fasse zusammen.
   it('parses model and reasoning effort overrides', () => {
     writeAgentFile(
       'smart',
+      // Frontmatter must start at column 0, the way a real .claude/agents/*.md
+      // file is written — both the delimiter and the field regexes are anchored
+      // to the start of a line, so an indented block parses as no agent at all.
       `---
-      description: A smart agent.
-      model: openai/gpt-5.6-sol
-      effort: high
-      ---
+description: A smart agent.
+model: openai/gpt-5.6-sol
+effort: high
+---
 
-      Think carefully.
-      `,
+Think carefully.
+`,
     );
 
     expect(loadFileSubagents(tmp).smart).toEqual({

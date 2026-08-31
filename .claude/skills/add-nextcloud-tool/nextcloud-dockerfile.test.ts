@@ -40,6 +40,20 @@ describe('container/Dockerfile installs nextcloud-mcp-server', () => {
     expect(installsServer).toBe(true);
   });
 
+  it('pins importlib_metadata alongside the server', () => {
+    // nextcloud-mcp-server imports the `importlib_metadata` backport in
+    // observability/tracing.py without declaring it as a dependency — it used
+    // to arrive transitively via opentelemetry-api. opentelemetry-api 1.44.0
+    // dropped it (py3.12 has importlib.metadata in the stdlib), so a rebuild
+    // re-resolved the floating transitive deps without it and every server
+    // spawn died at import with ModuleNotFoundError. The ARG pin only covers
+    // the top-level package, so the backport needs its own pin.
+    expect(text).toMatch(/^\s*ARG\s+IMPORTLIB_METADATA_VERSION=\d+\.\d+\.\d+\s*$/m);
+    const withBackport =
+      /uv\s+tool\s+install[\s\S]*?--with\s+"importlib_metadata==\$\{IMPORTLIB_METADATA_VERSION\}"/.test(text);
+    expect(withBackport).toBe(true);
+  });
+
   it('installs the httpx env-proxy shim into the server venv', () => {
     // Without it, the server's explicitly-built httpx transport bypasses
     // HTTPS_PROXY, so those calls never reach the OneCLI gateway and arrive

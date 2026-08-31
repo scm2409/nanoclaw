@@ -117,19 +117,31 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # covers pnpm globals. uv ships its own Python, so no apt python3 and no second
 # system package manager in PATH.
 #
-# Both pins are deliberate: PyPI is outside pnpm's minimumReleaseAge gate, so
+# All pins are deliberate: PyPI is outside pnpm's minimumReleaseAge gate, so
 # versions are chosen by hand from a release at least a week old.
+#
+# importlib_metadata is pinned separately because nextcloud-mcp-server imports
+# the backport in observability/tracing.py without declaring it — it used to
+# arrive transitively via opentelemetry-api. opentelemetry-api 1.44.0 dropped
+# that dependency (py3.12 has importlib.metadata in the stdlib). The ARG above
+# pins only the top-level package; uv re-resolves the transitive tree on every
+# build, so that rebuild silently produced an env where every server spawn died
+# at import with ModuleNotFoundError, and the SDK dropped the MCP server
+# without an error the agent could see.
 #
 # UV_TOOL_DIR / UV_PYTHON_INSTALL_DIR must be redirected: uv defaults to
 # ~/.local/share/uv, which is /root/... at build time and unreadable by the
 # non-root `node` user the container actually runs as.
 ARG NEXTCLOUD_MCP_VERSION=0.145.0
+ARG IMPORTLIB_METADATA_VERSION=9.0.0
 COPY --from=uvbin /uv /usr/local/bin/uv
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_TOOL_BIN_DIR=/usr/local/bin
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv tool install --python 3.12 "nextcloud-mcp-server==${NEXTCLOUD_MCP_VERSION}" && \
+    uv tool install --python 3.12 \
+      --with "importlib_metadata==${IMPORTLIB_METADATA_VERSION}" \
+      "nextcloud-mcp-server==${NEXTCLOUD_MCP_VERSION}" && \
     chmod -R a+rX /opt/uv
 
 # nextcloud-mcp-server hands httpx a transport it built itself, and an explicit

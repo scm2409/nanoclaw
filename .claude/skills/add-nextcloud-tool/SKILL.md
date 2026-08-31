@@ -83,15 +83,27 @@ echo "ALREADY APPLIED — skip to Phase 4"
 
 `container/Dockerfile` is `node:22-slim` and `container/cli-tools.json` only handles pnpm globals, so this server needs its own block. Insert it before the `ncl CLI wrapper` section (which is before `USER node`):
 
+`importlib_metadata` gets its own pin: `nextcloud-mcp-server` imports the
+backport in `observability/tracing.py` without declaring it, relying on
+`opentelemetry-api` to pull it in. `opentelemetry-api` 1.44.0 dropped that
+dependency (py3.12 has `importlib.metadata` in the stdlib), and since the ARG
+pins only the top-level package while uv re-resolves the transitive tree on
+every build, a rebuild produced an env where every server spawn died at import
+with `ModuleNotFoundError` — and the SDK dropped the MCP server silently, so
+the agent just reported having no Nextcloud tools.
+
 ```dockerfile
 ARG UV_VERSION=0.11.32
 ARG NEXTCLOUD_MCP_VERSION=0.145.0
+ARG IMPORTLIB_METADATA_VERSION=9.0.0
 COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /usr/local/bin/uv
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_TOOL_BIN_DIR=/usr/local/bin
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv tool install --python 3.12 "nextcloud-mcp-server==${NEXTCLOUD_MCP_VERSION}" && \
+    uv tool install --python 3.12 \
+      --with "importlib_metadata==${IMPORTLIB_METADATA_VERSION}" \
+      "nextcloud-mcp-server==${NEXTCLOUD_MCP_VERSION}" && \
     chmod -R a+rX /opt/uv
 ```
 

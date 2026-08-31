@@ -11,6 +11,42 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-08-31 — Fix the silently dead Nextcloud MCP server, and make that class of failure visible
+
+The `nextcloud` subagent had stopped seeing any Nextcloud tools and reported so
+to the user on every hourly Deck sweep. `nextcloud-mcp-server` was dying at
+import with `ModuleNotFoundError: No module named 'importlib_metadata'`: it
+imports that backport in `observability/tracing.py` without declaring it as a
+dependency, relying on `opentelemetry-api` to pull it in, and
+`opentelemetry-api` 1.44.0 dropped it (py3.12 has `importlib.metadata` in the
+stdlib). The Dockerfile's `NEXTCLOUD_MCP_VERSION` ARG pins only the top-level
+package while `uv tool install` re-resolves the transitive tree on every build,
+so the 2026-08-30 image rebuild silently produced an env without the backport.
+`container/Dockerfile` now pins `IMPORTLIB_METADATA_VERSION` and passes it as
+`--with`, chosen per the file's existing rule of a PyPI release at least a week
+old. The `/add-nextcloud-tool` skill and its structural Dockerfile guard carry
+the same pin so a reinstall cannot regress it.
+
+The reason this ran for hours unnoticed is the more interesting half. The SDK
+spawns an MCP server lazily and, when it dies or never handshakes, drops it and
+continues — no error anywhere. The agent then finds itself without tools it was
+told it has and reports that to the user as a fact about the world, which is
+indistinguishable from a correct answer. The runner had logged "Additional MCP
+server: nextcloud" at startup and never checked it came up. New
+`container/agent-runner/src/mcp-health.ts` drives a real `initialize` +
+`tools/list` handshake against every configured server at startup and logs the
+tool count, or a warning carrying the server's own decisive stderr line. It is
+deliberately not awaited — diagnostics must not put a Nextcloud round-trip in
+front of the first message — and never throws.
+
+Also de-indented the frontmatter in one `file-subagents.test.ts` case. It wrote
+its YAML indented inside a template literal, which the parser correctly rejects
+(both the delimiter and field regexes are anchored to the start of a line, and
+real `.claude/agents/*.md` files begin at column 0), so the test had been
+failing against correct behavior.
+
+vibecoded with Claude Opus 5
+
 ## 2026-08-31 — Pin Claude Code model aliases and persist the token baseline
 
 Fixed a leak where a group running on a non-Anthropic main model (e.g. an
@@ -160,7 +196,7 @@ mutation do not.
 
 **Deliberate caveat, accepted as-is.** The fork's meal-plan tool module
 accepts a `restricted` flag but never reads it — restricted mode therefore
-grants *full* meal-plan write access, including `delete_meal_plan_entry`.
+grants _full_ meal-plan write access, including `delete_meal_plan_entry`.
 Not a bug to route around; the meal plan just isn't part of what this flag
 protects.
 
@@ -171,7 +207,7 @@ file so it doesn't hunt for a capability that was never there.
 **Unpinned-fork risk, closed with a build-time test.** Restricted mode
 lives on an unreleased commit (`80e9166`) — the fork has no git tag and
 `__version__` is still `0.3.1`. Following the fork's own README verbatim
-(`@v0.3.1`) would silently install a ref *without* restricted mode. The
+(`@v0.3.1`) would silently install a ref _without_ restricted mode. The
 Dockerfile pins `ARG MEALIE_MCP_REF=80e9166` (a commit SHA, not a branch),
 and `src/mealie-mcp-pin.test.ts` fails the build if that ARG is ever changed
 to `main`/`master`/`HEAD` or anything that isn't a SHA or version tag —
@@ -202,8 +238,8 @@ embedded instructions and secret-looking values.
 convention (English code/skills/docs), the new `mealie` subagent file and
 the shipped `mealie-restricted` container skill are English — a departure
 from `dokuwiki.md`/`nextcloud.md`, which are German and predate that
-convention. Separately, and orthogonally: what the subagent *writes into
-Mealie* (recipe titles, ingredients, notes, meal-plan entries) is German,
+convention. Separately, and orthogonally: what the subagent _writes into
+Mealie_ (recipe titles, ingredients, notes, meal-plan entries) is German,
 stated as a fact about this specific recipe collection in the subagent file
 and in `instructions.local.md`, not left to whatever language a task
 happens to arrive in. Imported recipe text (`import_recipe_from_url`) is
@@ -283,7 +319,7 @@ control, since it never had the tools to do that anyway.
 
 Live-testing the write refusal turned up a second, less obvious gap. The
 subagent correctly refused to put a password on a page, but `kail01` relayed
-that as *the subagent's own quirk* ("eine Eigenentscheidung des Subagenten,
+that as _the subagent's own quirk_ ("eine Eigenentscheidung des Subagenten,
 keine von mir vorgegebene Regel") and offered to try again or "work out a way
 to do it" — which is exactly the pressure the refusal exists to withstand.
 The paragraph therefore also states that both rules are house policy, and
@@ -318,7 +354,7 @@ fine is precisely the signal to withhold it.
 
 Worth recording for the next person who edits a persona: the first attempt
 put this in `groups/main-agent/.claude-fragments/persona.md`, which is the
-*generated* artifact — `composeGroupClaudeMd` rewrites the whole fragments
+_generated_ artifact — `composeGroupClaudeMd` rewrites the whole fragments
 directory from `instructions.prepend.md` on every container spawn, so the
 edit silently vanished at the next restart and only the live test revealed
 it. `instructions.prepend.md` is the source of truth; `.claude-fragments/`
@@ -505,7 +541,7 @@ claims the server. Verified by pointing the CLI at a fake Anthropic endpoint tha
 logs the `tools` array actually sent per thread: main 30 → 24 tools, subagent
 27 → 21, zero `mcp__nc__*` in either.
 
-What does work is declaring the server *only* in `AgentDefinition.mcpServers`.
+What does work is declaring the server _only_ in `AgentDefinition.mcpServers`.
 Same harness: main thread 24 tools with none of the server's, subagent 84 with all
 63, and the subagent's tool call really executed. The server process is not spawned
 until the subagent is invoked, so a withheld server costs nothing on turns that
@@ -620,7 +656,7 @@ vibecoded with Claude Opus 5
 
 The agent has a Nextcloud calendar of its own but no write access to the operator's, so
 "make me an appointment" had no path at all. It now has one that keeps the human in the
-loop by construction: it mails a real iMIP invitation, and *accepting* it in the mail
+loop by construction: it mails a real iMIP invitation, and _accepting_ it in the mail
 client is what creates the event. Nothing lands in a calendar without a deliberate act.
 
 The new container skill `calendar-invite` is a `SKILL.md` plus `make-ics.ts` — the first
@@ -657,7 +693,7 @@ A calendar without one is untouched.
 
 Second, the subject. It was always host-generated (`Message from <name>`, or `Re: <last
 subject>` when a thread ref existed), which for an invitation meant a generic subject
-*and* `In-Reply-To` pointing at whatever unrelated mail the correspondent last sent —
+_and_ `In-Reply-To` pointing at whatever unrelated mail the correspondent last sent —
 filed into the wrong conversation and unfindable later. `send_message` and `send_file`
 now take an optional `subject`, carried in the content JSON that channels without
 subjects already ignore. The rule at the adapter is that setting a subject means starting
@@ -723,7 +759,7 @@ vibecoded with Claude Opus 5
 ## 2026-08-02 — overview-doc update rule surfaced in the coding skill, doc gap closed
 
 KaiL01 had kept an old Nextcloud Deck card open researching mail providers with a
-*native* two-way address allowlist, unaware that the email channel added 2026-08-01
+_native_ two-way address allowlist, unaware that the email channel added 2026-08-01
 enforces that allowlist inside NanoClaw itself — so no provider capability is
 required and the research question was already moot. Traced this to two doc gaps:
 `groups/main-agent/nanoclaw-overview.md` never said outright that Nextcloud has no
@@ -760,7 +796,7 @@ change was needed, just leaving it alone rather than adding a `!` allowlist
 entry for it.
 
 The actually regenerated-at-spawn fragment tree (`.claude-fragments/`) was
-*not* the right place to point the agent at this file — an initial edit
+_not_ the right place to point the agent at this file — an initial edit
 there was silently wiped by `composeGroupClaudeMd()` on the next container
 spawn, since that directory is fully derived from `instructions.prepend.md`
 and DB state, not a place for hand edits. Fixed by adding the pointer to
@@ -792,7 +828,7 @@ tests, in other files.
 Both places that start a loop leaked one:
 
 - `integration.test.ts` raced `runPollLoop` against an abort listener and a timeout,
-  and awaited *that race*. The race settles the instant `abort()` is called while the
+  and awaited _that race_. The race settles the instant `abort()` is called while the
   loop itself is still mid-turn, so the test returned with the loop still running.
 - `upload-trace.test.ts` never passed the signal to `runPollLoop` at all, so nothing
   short of process exit could stop its loop.
@@ -804,7 +840,7 @@ The signal is now also wired to `query.abort()` for the in-flight turn, the same
 mechanism the pending-slash-command path already used. Production is unaffected: no
 signal is passed there.
 
-The symptom was a test in a *different* file (`task-run turn wiring`) timing out
+The symptom was a test in a _different_ file (`task-run turn wiring`) timing out
 because its message had been consumed, appearing and disappearing with file execution
 order. It surfaced while working on the email channel and looked like a regression
 from it; it is not, and reproduces on the previous commit once the file order flips.
@@ -823,7 +859,7 @@ vibecoded with Claude Opus 5
 The token-usage ("📊 Tokens: …") and subagent ("🔎 Subagent: …") lines the container
 writes when `show_token_usage` / `log_subagents` are on were plain `kind: 'chat'` rows,
 delivered wherever the turn was routed. On a chat channel that is one extra line and
-nobody minds. On the new email channel it was one extra *mail per turn* — in practice
+nobody minds. On the new email channel it was one extra _mail per turn_ — in practice
 three mails arrived where one was expected.
 
 The noise is the visible half. The real problem is that a notice goes to whoever the
@@ -888,7 +924,7 @@ Other behaviour worth naming: a first scan records the mailbox's current end pos
 and processes nothing, so a fresh install doesn't answer years of archived mail; the
 UID watermark rather than `\Seen` drives selection, so a human reading the mailbox in
 a normal client can't make the agent skip messages; autoresponder mail is dropped
-*before* the allowlist check, because the mail-loop risk comes precisely from an
+_before_ the allowlist check, because the mail-loop risk comes precisely from an
 allowed correspondent's own out-of-office reply; and every send goes to exactly one
 recipient with no CC or BCC, so the agent cannot smuggle extra recipients into a mail.
 
@@ -1054,7 +1090,7 @@ pins exactly the same 2.1.197/0.3.197 we do. Bumping locally would mean divergin
 upstream actively maintains, re-deciding that divergence at every future update — for an effect
 that arrives for free once upstream bumps and we take it via `/update-nanoclaw`. Hardcoding a
 full model ID (`model: claude-opus-5`) in the subagent file works too — verified against the
-pinned CLI, which passes full model IDs straight through, only the *alias table* is stale — but
+pinned CLI, which passes full model IDs straight through, only the _alias table_ is stale — but
 it was rejected for the same maintenance reason: it needs manual updating for every future Opus,
 whereas the alias self-maintains once the SDK moves. Decision: wait for the upstream bump.
 
@@ -1072,7 +1108,7 @@ convention, meant for legitimate internal follow-ups). `poll-loop.ts`'s side-cha
 notices (`deliverSubagentNotice`, `deliverTokenUsageNotice`, `deliverErrorResult`) blindly
 reused that same routing context. Once the triggering message carried `channel_type: 'agent'`,
 every notice generated in response was itself delivered as a fresh `channel_type: 'agent'` row
-straight back into the *same session's* inbound queue — which the follow-up poller then pushed
+straight back into the _same session's_ inbound queue — which the follow-up poller then pushed
 into the still-open query as a new turn, whose own notice repeated the cycle. Self-sustaining,
 no external trigger needed, and specific to `--message` restarts on a group with
 `showTokenUsage`/`logSubagents` enabled — which is exactly why routine `ncl groups restart`
@@ -1088,7 +1124,7 @@ agent-to-agent route anyway). Added three regression tests reproducing the loop'
 (`AGENT_ROUTING`, mirroring a real a2a/on_wake inbound row) and asserting each notice type stays
 silent on it.
 
-Separately, and still worth keeping: once *any* terminal error genuinely repeats (e.g. the
+Separately, and still worth keeping: once _any_ terminal error genuinely repeats (e.g. the
 SDK's own internal retry against an already-exhausted spend cap), the old code relayed every
 identical repeat as a fresh duplicate message forever. `processQuery` now tracks the last
 delivered error-result text and, on an immediate identical repeat, delivers nothing further,
@@ -1227,12 +1263,12 @@ reading `matrix-js-sdk@41.9.0`'s own source rather than guessing further:
 2. The real trigger of the incident this specific evening: `ensureEncryptorForRoom` has the exact
    same local-state-lag blind spot for `m.room.encryption`, so a send failed with "Cannot encrypt
    event in unconfigured room" for a room the bot had just decrypted a live inbound message from.
-   `postMessage`'s catch-all then treated *that* local, self-inflicted failure as equally strong
+   `postMessage`'s catch-all then treated _that_ local, self-inflicted failure as equally strong
    evidence as a real `M_FORBIDDEN` departure and called `openDM()` — which silently invents a
    brand-new unencrypted room on any cache-miss. Fixed both ends: `ensureEncryptorForRoom` now
    falls back to a live `client.getStateEvent()` homeserver fetch when the local cache is empty
    (same authoritative-source principle as fix 1), and the `openDM()` self-heal path now requires
-   a *named* Matrix API error (`M_FORBIDDEN` / `M_NOT_FOUND` / "not a member") — anything else
+   a _named_ Matrix API error (`M_FORBIDDEN` / `M_NOT_FOUND` / "not a member") — anything else
    retries the same room once instead of ever abandoning it. Answering a question in a different
    room than it arrived in should never have been possible; now only unambiguous server-side proof
    of departure can cause it.
@@ -1279,7 +1315,7 @@ vibecoded with Claude Sonnet 5
 While closing out the Matrix DM-resolution fix below, hit a real bug in the
 changelog convention itself: after committing the fix, I tried to update its
 `Commits:` line to name the commit's own sha, committed that, then had to
-update the line again to also cover *that* commit, and so on — a commit's sha
+update the line again to also cover _that_ commit, and so on — a commit's sha
 is a hash of its own content, so a commit can never name its own final sha
 inside itself. Chased this three times before catching it, then tried a
 narrower fix (exempting changelog-only commits from the coverage check) —
@@ -1385,4 +1421,3 @@ delivery failure after a snapshot-restored restart; and replies landing in the
 wrong room when `openDM` resolved slowly.
 
 vibecoded with Claude Sonnet 5 and Claude Fable 5
-

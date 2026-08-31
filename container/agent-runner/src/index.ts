@@ -34,6 +34,7 @@ import { MEMORY_SESSION_HOOK } from './memory/session-hook.js';
 // Provider skills append imports to providers/index.ts.
 import './providers/index.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
+import { probeMcpServers } from './mcp-health.js';
 import { runPollLoop } from './poll-loop.js';
 
 function log(msg: string): void {
@@ -95,6 +96,27 @@ async function main(): Promise<void> {
   for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
     mcpServers[name] = serverConfig;
     log(`Additional MCP server: ${name} (${serverConfig.command})`);
+  }
+
+  // The line above only says a server was *configured*. The SDK spawns it
+  // lazily and, when it dies or never handshakes, drops it without an error —
+  // leaving the agent to report "I have no such tools" as if that were a fact
+  // about the world. Probe them for real so the failure is visible in the log.
+  // Deliberately not awaited: this is diagnostic, and the poll loop must not
+  // wait on a Nextcloud round-trip before it can answer the first message.
+  if (Object.keys(config.mcpServers).length > 0) {
+    void probeMcpServers(config.mcpServers).then((results) => {
+      for (const r of results) {
+        if (r.ok) {
+          log(`MCP server "${r.name}" healthy (${r.toolCount} tools)`);
+        } else {
+          log(
+            `WARNING: MCP server "${r.name}" failed its health probe — ${r.error}. ` +
+              `Any subagent claiming it will run without its tools.`,
+          );
+        }
+      }
+    });
   }
 
   const provider = createProvider(providerName, {
