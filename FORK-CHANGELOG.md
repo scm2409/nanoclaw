@@ -11,6 +11,23 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-01 — Translate the main-agent group config from German to English
+
+`groups/main-agent/instructions.prepend.md` and four subagent definitions
+(`.claude/agents/dokuwiki.md`, `nextcloud.md`, `smart.md`, `websearch.md`) were
+written in German; `coder.md` and `mealie.md` were already English. Per the
+fork's "code/docs/skills always English, German only for talking to the user"
+rule, the four subagent files plus the prepend were translated to English with
+every security, secret-handling, and delegation rule preserved verbatim in
+meaning. IDs and tool names (`matrix-mg-17844`, `martin-schoegler`,
+`plugin_reviewqueue_*`, model names) are untouched. The "Content language:
+German" policy in the Mealie section stays — it describes what the agent writes
+into Mealie, not the instruction language. Also updated the stale reference in
+`.claude/skills/add-dokuwiki-tool/SKILL.md` that quoted the old German section
+header `## Geheimnisse — nicht verhandelbar` as reference wording.
+
+vibecoded with claude-sonnet-5
+
 ## 2026-08-31 — Fix the silently dead Nextcloud MCP server, and make that class of failure visible
 
 The `nextcloud` subagent had stopped seeing any Nextcloud tools and reported so

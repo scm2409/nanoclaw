@@ -185,7 +185,7 @@ material with the occasional real key buried in it, so withholding must be
 the exception, not the default. The caller holds no wiki tools and cannot
 check anything the subagent redacts away. See
 `groups/main-agent/.claude/agents/dokuwiki.md` in this repo for the
-reference wording (`## Geheimnisse — nicht verhandelbar`).
+reference wording (`## Secrets — not negotiable`).
 
 Add a short delegation section to the caller group's persona fragment (mirroring its existing Nextcloud delegation section, if it has one): every DokuWiki action goes through the `dokuwiki` subagent, and a "submitted for review" reply from it is success, reported to the user as such — not as an error or incomplete task. Add one more sentence there too: a redacted-secret flag from the subagent is relayed to the user as-is (page + "credential found, withheld"), never a value, and the caller never tries to fetch the raw page itself to check. Add a further sentence covering new pages: the caller always tells the subagent to link a freshly created page from a suitable existing page (the subagent does this by default too, but the caller's order should say so explicitly, not rely on it silently).
 
