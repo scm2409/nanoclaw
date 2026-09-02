@@ -35,6 +35,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     cli_scope: row.cli_scope,
     log_subagents: row.log_subagents === 1,
     show_token_usage: row.show_token_usage === 1,
+    transcript_rotate_days: row.transcript_rotate_days,
     updated_at: row.updated_at,
   };
 }
@@ -267,7 +268,7 @@ registerResource({
       access: 'approval',
       description:
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
-        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage.',
+        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -286,6 +287,7 @@ registerResource({
             | 'cli_scope'
             | 'log_subagents'
             | 'show_token_usage'
+            | 'transcript_rotate_days'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -317,9 +319,29 @@ registerResource({
           updates.show_token_usage = raw === 'true' ? 1 : 0;
         }
 
+        // A chat transcript is re-sent on every turn, so its age is a direct
+        // cost lever: the same trivial reply measured ~26.5k prompt tokens in a
+        // fresh session and ~72k in a warm one. `none` clears back to the
+        // runner default; 0 or a negative would mean "rotate always" or
+        // "never", neither of which this flag is for.
+        if (args['transcript-rotate-days'] !== undefined || args.transcript_rotate_days !== undefined) {
+          const raw = String(args['transcript-rotate-days'] ?? args.transcript_rotate_days);
+          if (['none', 'null', 'default', ''].includes(raw)) {
+            updates.transcript_rotate_days = null;
+          } else {
+            const days = Number(raw);
+            if (!Number.isFinite(days) || !Number.isInteger(days) || days < 1) {
+              throw new Error(
+                '--transcript-rotate-days must be a whole number of days >= 1, or "none" for the default',
+              );
+            }
+            updates.transcript_rotate_days = days;
+          }
+        }
+
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days',
           );
         }
 

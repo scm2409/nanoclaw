@@ -87,3 +87,28 @@ describe('ClaudeProvider.maybeRotateContinuation', () => {
     expect(provider.maybeRotateContinuation('does-not-exist', CWD)).toBeNull();
   });
 });
+
+// Per-group rotation age. A chat transcript is re-sent on every turn, so a
+// group that talks a lot wants a shorter window than one that doesn't — the
+// host-wide env var cannot express that.
+describe('per-group transcript rotation age', () => {
+  it('rotates on the group setting even when the env var says otherwise', () => {
+    process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES = String(1024 * 1024);
+    process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS = '30';
+    const old = new Date(Date.now() - 5 * 86400_000).toISOString();
+    const p = writeTranscript('sess-group-old', 2048, old);
+    const provider = new ClaudeProvider({ transcriptRotateDays: 3 });
+    expect(provider.maybeRotateContinuation('sess-group-old', CWD)).toContain('3d cap');
+    expect(fs.existsSync(p)).toBe(false);
+  });
+
+  it('keeps a transcript younger than the group setting', () => {
+    process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES = String(1024 * 1024);
+    delete process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS;
+    const recent = new Date(Date.now() - 1 * 86400_000).toISOString();
+    const p = writeTranscript('sess-group-young', 2048, recent);
+    const provider = new ClaudeProvider({ transcriptRotateDays: 3 });
+    expect(provider.maybeRotateContinuation('sess-group-young', CWD)).toBeNull();
+    expect(fs.existsSync(p)).toBe(true);
+  });
+});

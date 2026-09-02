@@ -467,3 +467,62 @@ describe('groups config update --show-token-usage', () => {
     expect(bad.ok).toBe(false);
   });
 });
+
+// A long-lived chat transcript is re-sent on every turn, so a trivial reply in
+// an old session costs several times the same reply in a fresh one (measured:
+// ~26.5k prompt tokens fresh vs ~72k warm on the same group). The rotation age
+// was a container-only env var nobody passed through, so it sat at its 14-day
+// default with no way to change it per group.
+describe('groups config transcript-rotate-days', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  it('is unset (NULL) for a freshly created config row, leaving the built-in default', () => {
+    const GID = 'ag-rotate-default';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+    expect(getContainerConfig(GID)!.transcript_rotate_days).toBeNull();
+  });
+
+  it('stores a positive number and clears back to the default', async () => {
+    const GID = 'ag-rotate-set';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    const set = await dispatch(
+      { id: 'r1', command: 'groups-config-update', args: { id: GID, 'transcript-rotate-days': '3' } },
+      { caller: 'host' },
+    );
+    expect(set.ok).toBe(true);
+    expect(getContainerConfig(GID)!.transcript_rotate_days).toBe(3);
+
+    const cleared = await dispatch(
+      { id: 'r2', command: 'groups-config-update', args: { id: GID, 'transcript-rotate-days': 'none' } },
+      { caller: 'host' },
+    );
+    expect(cleared.ok).toBe(true);
+    expect(getContainerConfig(GID)!.transcript_rotate_days).toBeNull();
+  });
+
+  it('rejects zero, negatives and non-numbers rather than silently disabling rotation', async () => {
+    const GID = 'ag-rotate-bad';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+
+    for (const value of ['0', '-1', 'soon']) {
+      const res = await dispatch(
+        { id: `r-${value}`, command: 'groups-config-update', args: { id: GID, 'transcript-rotate-days': value } },
+        { caller: 'host' },
+      );
+      expect(res.ok).toBe(false);
+    }
+    expect(getContainerConfig(GID)!.transcript_rotate_days).toBeNull();
+  });
+});

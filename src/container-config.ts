@@ -52,6 +52,8 @@ export interface ContainerConfig {
   effort?: string;
   logSubagents?: boolean;
   showTokenUsage?: boolean;
+  /** Days before a chat transcript is rotated. Undefined = runner default. */
+  transcriptRotateDays?: number;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -74,6 +76,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     effort: row.effort ?? undefined,
     logSubagents: row.log_subagents === 1 ? true : undefined,
     showTokenUsage: row.show_token_usage === 1 ? true : undefined,
+    transcriptRotateDays: row.transcript_rotate_days ?? undefined,
   };
 }
 

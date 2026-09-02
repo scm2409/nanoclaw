@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Per-group transcript rotation age
+
+A chat transcript is re-sent on every turn, so its age is a direct cost lever.
+Measured on this install with the same trivial ping: ~26.5k prompt tokens in a
+freshly rotated session, ~72k in a warm one, and the hourly sweep had reached
+~198k cache reads with ~90k cache creation per run before it was rotated. Cache
+creation bills above plain input, so an old transcript is not merely bigger, it
+is repeatedly re-paid.
+
+The rotation age existed only as `CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS`, read
+inside the container — and nothing passed it in, so it sat at its 14-day
+default with no way to change it. Since one group's chat volume says nothing
+about another's, this became a per-group setting rather than a host-wide one,
+following the same plumbing chain as `log_subagents` and `show_token_usage`:
+migration 023, `ContainerConfigRow`, the scalar column set, `ContainerConfig`,
+`ncl groups config update --transcript-rotate-days`, `RunnerConfig`, and the
+provider option. The env var remains as the host-wide fallback; the group
+setting wins where both are present.
+
+The flag rejects 0 and negatives. Internally a non-positive value means
+"never rotate on age", which is the opposite of what someone typing
+`--transcript-rotate-days 0` would expect; `none` clears back to the default.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Log what the agent did, not only what it says it did
 
 The container log recorded `Progress:` and the final `Result:` — both of them

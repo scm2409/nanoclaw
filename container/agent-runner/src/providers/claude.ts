@@ -499,7 +499,12 @@ function transcriptRotateBytes(): number {
  * Secondary age trigger, measured from the transcript's first entry. 0 (or a
  * non-positive value) disables the age check; size alone then governs.
  */
-function transcriptRotateAgeMs(): number {
+function transcriptRotateAgeMs(configuredDays?: number): number {
+  // Per-group config wins over the env var: the env var is a host-wide
+  // fallback, and one group's chat volume says nothing about another's.
+  if (configuredDays !== undefined && Number.isFinite(configuredDays)) {
+    return configuredDays > 0 ? configuredDays * 86_400_000 : Infinity;
+  }
   const raw = process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS;
   if (raw === undefined || raw.trim() === '') return 14 * 86_400_000;
   const days = Number(raw);
@@ -627,6 +632,7 @@ export class ClaudeProvider implements AgentProvider {
   private additionalDirectories?: string[];
   private model?: string;
   private effort?: string;
+  private transcriptRotateDays?: number;
   private memorySessionHook?: MemorySessionHookRegistration;
 
   constructor(options: ProviderOptions = {}) {
@@ -638,6 +644,7 @@ export class ClaudeProvider implements AgentProvider {
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
     this.effort = options.effort;
+    this.transcriptRotateDays = options.transcriptRotateDays;
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -669,7 +676,7 @@ export class ClaudeProvider implements AgentProvider {
     const maxBytes = transcriptRotateBytes();
     const startMs = transcriptStartMs(transcriptPath);
     const ageMs = startMs === null ? 0 : Date.now() - startMs;
-    const maxAgeMs = transcriptRotateAgeMs();
+    const maxAgeMs = transcriptRotateAgeMs(this.transcriptRotateDays);
 
     let reason: string | null = null;
     if (size > maxBytes) {

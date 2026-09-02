@@ -27,6 +27,7 @@ export interface ContainerConfigRow {
   cli_scope: string; // 'disabled' | 'group' | 'global'
   log_subagents: number | null; // 0/1/NULL — NULL and 0 both mean off
   show_token_usage: number | null; // 0/1/NULL — NULL and 0 both mean off
+  transcript_rotate_days: number | null; // NULL = runner default (14)
   updated_at: string;
 }
 

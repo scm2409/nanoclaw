@@ -76,6 +76,13 @@ export interface ProviderOptions {
    * through to the underlying SDK. If omitted, the SDK default is used.
    */
   effort?: string;
+  /**
+   * Days before a chat transcript is rotated out of the resume path. A
+   * transcript is re-sent on every turn, so its age is a direct cost lever:
+   * the same trivial reply measured ~26.5k prompt tokens in a fresh session
+   * and ~72k in a warm one. Undefined keeps the provider's own default.
+   */
+  transcriptRotateDays?: number;
 }
 
 export interface QueryInput {

@@ -20,6 +20,8 @@ export interface RunnerConfig {
   effort?: string;
   logSubagents?: boolean;
   showTokenUsage?: boolean;
+  /** Days before a chat transcript rotates. Undefined = provider default. */
+  transcriptRotateDays?: number;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -51,6 +53,7 @@ export function loadConfig(): RunnerConfig {
     effort: (raw.effort as string) || undefined,
     logSubagents: raw.logSubagents === true,
     showTokenUsage: raw.showTokenUsage === true,
+    transcriptRotateDays: typeof raw.transcriptRotateDays === 'number' ? raw.transcriptRotateDays : undefined,
   };
 
   return _config;
