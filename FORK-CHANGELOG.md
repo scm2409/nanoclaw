@@ -11,6 +11,38 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Deep research moves into the `smart` subagent
+
+`deep-research` was written for the main agent to orchestrate: decompose the
+question, fan out `websearch` calls, then escalate the synthesis to `smart` if
+the material warranted it. That put the whole research haul — every search
+result, every fetched page summary — into the main chat's context, where it
+stays for the rest of the session and is re-sent on every subsequent turn. The
+conclusion is worth keeping; the material it came from usually is not.
+
+The skill now runs inside `smart` (preloaded via its frontmatter `skills:`),
+which turns the escalation step into a no-op — `smart` is already the
+escalation model, so it does the weighing itself rather than looking for
+someone to hand it to. The main agent hands over one self-contained order and
+receives only the finished report. Its instructions gained the matching rule:
+deep research goes to `smart` without the usual "ask before using smart"
+question, because explicitly asking for deep research is itself the approval,
+while a single lookup or fact-check still goes straight to `websearch`.
+
+The skill is written to stay correct under either runner: the synthesis step
+now says plainly that whoever runs it does the weighing, and keeps the
+delegate-to-`smart` path for an agent that genuinely needs it.
+
+Verified that nested delegation actually works before relying on it —
+`smart` was asked to invoke `coder`, and the container log recorded both
+`Subagent started` lines and the returned result.
+
+Also corrected a stale model name in the instructions: `smart` was described
+as "model opus by default" and has been `openai/gpt-5.6-sol` since the
+OpenRouter switch.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Per-group transcript rotation age
 
 A chat transcript is re-sent on every turn, so its age is a direct cost lever.

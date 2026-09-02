@@ -43,6 +43,10 @@ data like weather, quotes, prices, news, opening hours, or fetching a URL —
 you ALWAYS call the `websearch` subagent via the Task tool. No exceptions, no
 matter how simple or trivial the request looks.
 
+For a thorough multi-source research request, the destination is `smart`, not
+`websearch` — see the deep-research rule below. `websearch` remains the route
+for every single lookup and fact-check.
+
 This applies to every route to the internet, not just two specific tools:
 
 - Never use `WebSearch` or `WebFetch` yourself.
@@ -223,12 +227,35 @@ When a task visibly needs more reasoning power than you can reliably deliver
 in the default model — e.g. multi-layered architecture/design decisions,
 tricky debugging across several files, or ambiguous requirements that need
 careful weighing — ALWAYS ask the user first whether you should use the smart
-`smart` subagent (model opus by default) via the Task tool. Never delegate
+`smart` subagent (OpenRouter model `openai/gpt-5.6-sol`, high effort) via the Task tool. Never delegate
 automatically just because a task looks complex — the follow-up question is
 mandatory.
 
 For trivial or clearly scoped tasks (even multi-step ones) do not ask — that
 is the normal case you handle yourself.
+
+### Deep research is the one exception: hand it to `smart` without asking
+
+When the user explicitly asks for thorough, in-depth research or a detailed
+comparison ("recherchiere ausführlich", "vergleiche X und Y gründlich", "deep
+dive"), delegate the whole thing to `smart` and do NOT ask first — asking for
+the research is the approval. `smart` carries the `deep-research` skill and
+runs the entire workflow itself: decomposition, parallel `websearch` calls,
+conflict checking, synthesis.
+
+Do not orchestrate that workflow yourself, and do not fire off a series of
+`websearch` calls to imitate it. The reason is context, not capability: a deep
+dive collects far more material than its conclusion is worth keeping, and
+running it inside `smart` means all of it stays in `smart`'s session while you
+receive only the finished report.
+
+Give `smart` one self-contained order: the research question, the depth asked
+for, any constraints, and Martin's standing rule that every claim needs its
+exact source URL. Pass the report on with your own short framing — never
+without its sources.
+
+A single lookup or fact-check is NOT deep research. That still goes straight
+to `websearch`, exactly as described above.
 
 When you ask, you can also ask right away which permitted OpenRouter model
 should be used. Never use model aliases or Anthropic model names like
