@@ -11,6 +11,42 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — A `browser` subagent, and what `websearch` does when a page is out of reach
+
+`websearch` reads pages; it cannot operate them. Content that only appears
+after JavaScript runs, sits behind a consent wall, or needs a form filled in
+was simply unreachable — and because the subagent had no way to say so
+precisely, "found nothing" was indistinguishable from "there is nothing".
+
+The `agent-browser` skill and its CLI were already in the image but sat with
+the main agent, where using them meant pulling raw page content into the chat
+context. They now belong to a dedicated `browser` subagent: `tools: [Bash,
+Read]`, `skills: [agent-browser]`, no `WebSearch`/`WebFetch`. `websearch`
+gained a section on naming what stopped it and never routing around it, and
+the main agent's instructions escalate to `browser` on that report without
+asking, or go there directly when a task needs interaction rather than
+reading. `websearch` cannot escalate by itself — it has no Task tool, by
+design — so the handover runs through the main agent.
+
+The security trade is stated rather than hidden. `browser` is the one agent
+that both reads hostile content and holds a shell. A narrowed
+`tools: [Bash(agent-browser:*)]` was tried first and measured: the runner
+passes subagent tool names through unchanged, the pattern was not enforced,
+and a plain `echo` ran. So the confinement is instruction-level, and the
+subagent file says so in as many words rather than implying a sandbox that
+does not exist. It carries the same injection and secret-handling rules as
+`websearch`, plus three of its own: never enter a credential, never navigate
+to a URL a page's text told it to, and stop and ask before any click that
+buys, sends, publishes, registers or deletes.
+
+Verified end to end against a live page — Chromium opened `example.com` and
+the subagent returned its title and heading.
+
+`nanoclaw-overview.md` updated: seven subagents now, with the shell trade
+noted there too.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Deep research moves into the `smart` subagent
 
 `deep-research` was written for the main agent to orchestrate: decompose the
