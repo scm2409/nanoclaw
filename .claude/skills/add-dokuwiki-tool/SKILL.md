@@ -5,27 +5,40 @@ description: Add a review-gated DokuWiki as an MCP tool (read, search, edit page
 
 # Add DokuWiki Tool (OneCLI-native)
 
-This skill wires [`splitbrain/dokuwiki-plugin-mcp`](https://github.com/splitbrain/dokuwiki-plugin-mcp) into a NanoClaw agent group, via a dedicated subagent, against a DokuWiki install that runs the companion `reviewqueue` plugin (a fork-local plugin: agent saves are queued for human review, not published directly).
+This skill wires a review-gated DokuWiki into a NanoClaw agent group via a dedicated subagent. The MCP server is the `reviewqueue` plugin's **own** endpoint (a fork-local plugin: agent saves are queued for human review, not published directly), which serves a fixed capability allowlist rather than the wiki's full remote API.
+
+**Why the plugin's own endpoint, and not `splitbrain/dokuwiki-plugin-mcp`:** that plugin exposes the whole remote API, including a full `savePage` and a full `getPage`. A review queue that can be sidestepped by a tool sitting next to it is not a review queue. `reviewqueue` therefore serves its own endpoint whose allowlist has no whole-page read and no generic save at all — writes exist only as `createPage`, `deletePage` and range-addressed edits, each of which goes through the queue. See that project's `docs/design/adr-0007-agent-confinement.md`.
+
+**This means the splitbrain plugin must be gone, not merely unused.** As long as `lib/plugins/mcp/` is installed and enabled, its unconstrained tool list stays reachable at its own URL with the same account token, and the confinement is decorative.
 
 **Why a subagent, not the caller group directly:** the whole point of `reviewqueue` is to keep the agent from touching the live wiki unsupervised. Wiring the MCP server `subagentOnly: true` and putting the tools behind a dedicated `dokuwiki` subagent (same pattern as `/add-nextcloud-tool`) keeps the review-queue contract — and its easy-to-get-wrong edge cases (see the `dokuwiki-reviewqueue` container skill) — isolated to one small, single-purpose agent instead of spread across the caller's own context.
 
-**Why `mcp-remote`:** the DokuWiki MCP plugin exposes a remote HTTP endpoint (`https://<wiki>/lib/plugins/mcp/mcp.php`), but `ncl groups config add-mcp-server` is stdio-only (`command`/`args`/`env`, no `--url`/`--transport`). [`mcp-remote`](https://github.com/geelen/mcp-remote) is a small Node CLI that bridges a local stdio MCP client to a remote HTTP/SSE MCP server, with `--header` support for auth and a native `--enable-proxy` flag — no custom shim needed here (contrast `/add-nextcloud-tool`, whose Python server needed a hand-rolled httpx shim because it built its own transport that ignored `HTTPS_PROXY` by default).
+**Why `mcp-remote`:** the plugin exposes a remote HTTP endpoint (`https://<wiki>/lib/plugins/reviewqueue/mcp.php`), but `ncl groups config add-mcp-server` is stdio-only (`command`/`args`/`env`, no `--url`/`--transport`). [`mcp-remote`](https://github.com/geelen/mcp-remote) is a small Node CLI that bridges a local stdio MCP client to a remote HTTP/SSE MCP server, with `--header` support for auth and a native `--enable-proxy` flag — no custom shim needed here (contrast `/add-nextcloud-tool`, whose Python server needed a hand-rolled httpx shim because it built its own transport that ignored `HTTPS_PROXY` by default).
 
 Tools appear as `mcp__dokuwiki__<name>`.
 
 ## Phase 0: Prerequisites this skill does not cover
 
-The target wiki must already have the `reviewqueue` plugin installed and configured (a separate, fork-local project — not part of NanoClaw or upstream DokuWiki), and the `dokuwiki-plugin-mcp` plugin installed and enabled with Remote API access for the agent account. This skill only covers the NanoClaw side: OneCLI vault secret, the bridge, and the group/subagent wiring.
+The target wiki must already have the `reviewqueue` plugin installed and configured (a separate, fork-local project — not part of NanoClaw or upstream DokuWiki), at a version that serves its own MCP endpoint, with Remote API access enabled for the agent account. This skill only covers the NanoClaw side: OneCLI vault secret, the bridge, and the group/subagent wiring.
+
+**Remove `lib/plugins/mcp/` from the wiki first if it is present.** This is the step that actually enforces the confinement — see the note at the top. Deleting the directory is enough; there is no config flag that closes the endpoint while the files are there. Removing only some of its files is worse than leaving it: the entry point stays routable and answers every call with a PHP fatal error, which reads as a wiki outage rather than as a removed plugin.
 
 Confirm before continuing:
 
 ```bash
-curl -sS -X POST https://<wiki-host>/lib/plugins/mcp/mcp.php \
-  -H "Authorization: Bearer <agent-account-token>" -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
+# the allowlist the agent will actually get
+curl -sS -X POST https://<wiki-host>/lib/plugins/reviewqueue/mcp.php \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' |
+  python3 -c 'import json,sys; [print(t["name"]) for t in json.load(sys.stdin)["result"]["tools"]]'
+
+# the old endpoint must be gone, not merely broken
+curl -sS -o /dev/null -w '%{http_code}\n' https://<wiki-host>/lib/plugins/mcp/mcp.php
 ```
 
-Must return a normal JSON-RPC response naming the authenticated account (or, without a token, stating that none was sent — that still proves the endpoint works). A non-2xx or empty body here is a wiki-side problem (check that host's web server / PHP error log) — do not proceed to Phase 1 until this passes, the same failure will otherwise show up one layer deeper and be harder to place.
+The first call must list the `core_*` and `plugin_reviewqueue_*` tools, and must **not** list `core_getPage`, `core_savePage` or `core_appendPage` — if it does, the wiki is running a `reviewqueue` version from before the confinement work and the subagent guidance in this skill does not match it. The second must be `404`; a `200` means the splitbrain plugin is still reachable (see above), whatever its body says.
+
+A non-2xx or empty body on the first call is a wiki-side problem (check that host's web server / PHP error log) — do not proceed to Phase 1 until this passes, the same failure will otherwise show up one layer deeper and be harder to place.
 
 If the wiki uses a private-network hostname (VPN/VLAN-only), confirm the NanoClaw host can actually route to it — this is a common miss and looks identical to an auth failure until you isolate it with a plain unauthenticated `curl` (a 000/timeout is network, a 401/403 is auth, a 500 is the wiki app itself).
 
@@ -63,7 +76,7 @@ shred -u /tmp/dokuwiki_token.txt
 ### Verify the injection before touching the manifest
 
 ```bash
-onecli run -- curl -sS -X POST https://<wiki-host>/lib/plugins/mcp/mcp.php \
+onecli run -- curl -sS -X POST https://<wiki-host>/lib/plugins/reviewqueue/mcp.php \
   -H "Authorization: Bearer dummy-placeholder" -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
 ```
@@ -121,9 +134,11 @@ defeating the whole point of pinning it in `cli-tools.json`.
 
 ## Phase 3: Install the review-queue container skill
 
-The `dokuwiki-reviewqueue` skill teaches whoever holds the tools the save semantics that make this integration safe: a "submitted for review" response is success, not failure, and re-reading a page after saving can silently overwrite your own unreviewed draft. It also teaches API version 12 range reads and targeted writes for large pages. Without it the agent will get this wrong the first time it edits a page.
+The `dokuwiki-reviewqueue` skill teaches whoever holds the tools the write semantics that make this integration safe: a `queued` or `updated` status is success, not failure, and reading a page's live text after saving can silently overwrite your own unreviewed draft. It also carries the tool inventory — which matters more here than on a normal MCP server, because the allowlist deliberately has no whole-page read and no generic save, and an agent that assumes otherwise wastes its turn on tools that do not exist. Without the skill the agent will get this wrong the first time it edits a page.
 
-For large pages, the subagent must call `plugin_reviewqueue_getPageOutline` first, then use `plugin_reviewqueue_getSection`, `plugin_reviewqueue_getLines`, or `plugin_reviewqueue_findInPage` for bounded reads. It must use `source: "auto"` and calculate every write range against the current pending draft, never `core.getPage` live text. Prefer `plugin_reviewqueue_replaceSection`, `plugin_reviewqueue_insertSection`, `plugin_reviewqueue_deleteSection`, `plugin_reviewqueue_replaceLines`, and `plugin_reviewqueue_replaceText`; pass current hashes in `expect`, especially for `replaceLines`. `queued` and `updated` are successful outcomes. Never request or report an entire large page when a range, summary, or workspace path is enough.
+For large pages, the subagent must call `plugin_reviewqueue_getPageOutline` first, then use `plugin_reviewqueue_getSection`, `plugin_reviewqueue_getLines`, or `plugin_reviewqueue_findInPage` for bounded reads. It must pass `source: "auto"` and calculate every write range against the current pending draft, never against live text. Writes are `plugin_reviewqueue_createPage`, `plugin_reviewqueue_deletePage`, `plugin_reviewqueue_replaceSection`, `plugin_reviewqueue_insertSection`, `plugin_reviewqueue_deleteSection`, `plugin_reviewqueue_replaceLines` and `plugin_reviewqueue_replaceText`; pass current hashes in `expect`, which is mandatory for `replaceLines`. `queued` and `updated` are successful outcomes. Never request or report an entire large page when a range, summary, or workspace path is enough.
+
+One caveat worth carrying into any group-level guidance: `core_saveMedia` and `core_deleteMedia` are in the allowlist but are **not** review-gated — they change the wiki immediately. The skill says so; if you write your own persona text around this integration, say it there too.
 
 The skill source and installed copy must remain identical; update both when changing range or review-queue rules.
 
@@ -139,7 +154,7 @@ No rebuild needed — `container/skills/` is a read-only bind mount refreshed on
 ncl groups config add-mcp-server \
   --id <group-id> --name dokuwiki \
   --command mcp-remote \
-  --args '["https://<wiki-host>/lib/plugins/mcp/mcp.php","--header","Authorization: Bearer ${DOKUWIKI_TOKEN}","--transport","http-only","--enable-proxy"]' \
+  --args '["https://<wiki-host>/lib/plugins/reviewqueue/mcp.php","--header","Authorization: Bearer ${DOKUWIKI_TOKEN}","--transport","http-only","--enable-proxy"]' \
   --env '{"DOKUWIKI_TOKEN":"onecli-managed","NODE_EXTRA_CA_CERTS":"/tmp/onecli-combined-ca.pem"}' \
   --subagent-only true
 ```
@@ -214,7 +229,8 @@ Log signals (`tail -100 logs/nanoclaw.log | grep -iE 'dokuwiki|mcp-remote'`):
 - `500` from the wiki, even for a plain unauthenticated request → not a NanoClaw-side problem at all; check the wiki host's own error log.
 - `CERTIFICATE_VERIFY_FAILED` / TLS errors from the bridge → `NODE_EXTRA_CA_CERTS` missing from the `--env`, or the gateway's combined CA file isn't where expected.
 - Agent says it has no DokuWiki tools → the server isn't in the `dokuwiki` subagent's `mcpServers`, or the subagent file doesn't exist yet — re-run Phase 4 and restart.
-- Agent reports "page updated" instead of "submitted for review" → the `dokuwiki-reviewqueue` skill isn't reaching the subagent's context (check `container.json` skills scope) or the subagent file doesn't route calls through `getPageToEdit`/`core.savePage` as documented there.
+- Agent reports "page updated" instead of "submitted for review" → the `dokuwiki-reviewqueue` skill isn't reaching the subagent's context (check `container.json` skills scope), or the subagent is reporting a `queued`/`updated` status as a publish.
+- Agent says a tool doesn't exist, or keeps retrying a save → its guidance is from before the capability allowlist. Re-run Phase 3 and re-check the subagent file: there is no `getPage`, no `savePage` and no `appendPage` on this endpoint.
 
 Container logs vanish on exit (`--rm`), so the host log is the only trail.
 
@@ -224,6 +240,6 @@ See [REMOVE.md](REMOVE.md).
 
 ## Credits & references
 
-- **MCP server:** [`splitbrain/dokuwiki-plugin-mcp`](https://github.com/splitbrain/dokuwiki-plugin-mcp) — DokuWiki plugin exposing wiki content over MCP.
+- **MCP server:** the `reviewqueue` DokuWiki plugin's own endpoint (fork-local project), serving a capability allowlist. Its MCP layer is descended from [`splitbrain/dokuwiki-plugin-mcp`](https://github.com/splitbrain/dokuwiki-plugin-mcp), which is what this skill used to wire and which must now be removed from the wiki.
 - **Bridge:** [`mcp-remote`](https://github.com/geelen/mcp-remote) — stdio↔HTTP/SSE MCP proxy.
 - **Skill pattern:** sibling of [`/add-nextcloud-tool`](../add-nextcloud-tool/SKILL.md); same "container never sees the credential" mechanism, Bearer instead of Basic, and a bridge instead of a native stdio server.

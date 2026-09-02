@@ -11,6 +11,47 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-01 — Point the DokuWiki subagent at the reviewqueue plugin's own MCP endpoint
+
+The wiki's MCP surface moved. It used to be `splitbrain/dokuwiki-plugin-mcp` at
+`/lib/plugins/mcp/mcp.php`, which exposed the full remote API — including a
+plain `getPage` and `savePage`. That made the `reviewqueue` plugin's whole
+premise optional: an agent could reach the same wiki through a tool sitting next
+to the queue and write straight past it. The plugin now serves its own endpoint
+at `/lib/plugins/reviewqueue/mcp.php` behind a fixed capability allowlist, and
+the general-purpose plugin has been removed from the wiki host.
+
+That allowlist is a different tool set, not a renamed one. There is no
+whole-page read and no generic save at all: reads go through
+`plugin_reviewqueue_getPageToEdit` or the outline/section/line/find tools, a new
+page is `plugin_reviewqueue_createPage`, a removed page is
+`plugin_reviewqueue_deletePage`, and every other write is range-addressed.
+Writes also no longer signal the queue by returning an error — they return a
+structured `live` / `queued` / `updated` status with a `pendingId`.
+
+So the guidance was rewritten rather than patched: `container/skills/
+dokuwiki-reviewqueue/SKILL.md` (and its `/add-dokuwiki-tool` source copy) now
+lead with what the allowlist does and does not contain, carry the full tool
+inventory, and drop the obsolete "the error is the success path" chapter.
+`groups/main-agent/.claude/agents/dokuwiki.md` was rewritten along the same
+lines and de-duplicated. The install skill gained the step that actually
+enforces the confinement — removing `lib/plugins/mcp/` from the wiki, not merely
+disabling it — plus a Phase 0 check that asserts both the new allowlist and the
+old endpoint's absence.
+
+One hazard surfaced while reading the live schema and is now documented in all
+three places: `core_saveMedia` and `core_deleteMedia` are in the allowlist but
+are **not** review-gated. They change the wiki immediately, which makes them the
+only way through this integration to touch the live wiki unsupervised.
+
+`src/dokuwiki-cli-tools.test.ts` (and its skill copy, which had drifted behind
+it) grew into a guard against exactly the failure this change repairs: guidance
+naming tools the allowlist removed, guidance missing tools it added, the two
+skill copies falling out of sync, and the install skill pointing the bridge at
+the old endpoint.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-01 — Translate the main-agent group config from German to English
 
 `groups/main-agent/instructions.prepend.md` and four subagent definitions
