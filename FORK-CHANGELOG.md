@@ -11,6 +11,36 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Teach the skills that a healthy MCP handshake is not a working tool set
+
+Follow-up to the container-log and run-health change, and to the incident
+behind it. The `dokuwiki` subagent's two-day outage was a Gemini schema
+rejection: two of the old `splitbrain/dokuwiki-plugin-mcp` tools declared
+`type: array` properties with no `items`, Google rejects the whole
+`GenerateContentRequest` for that, and one malformed tool therefore disabled
+all 53. The subagent then had no tools and reported that the wiki was
+unreachable — a confident, wrong sentence that sent the diagnosis at the wiki
+for two days. That plugin has since been removed from the wiki and the bridge
+repointed at the `reviewqueue` endpoint, so the specific bug is gone here; a
+probe of the current endpoint confirms 27 tools with no array-typed parameters
+at all, and the `nextcloud` (63) and `mealie` (18) servers are clean too.
+
+`/add-dokuwiki-tool` gained a Phase 6 check that validates the endpoint's tool
+schemas against the constraint the provider actually enforces, with the
+reasoning spelled out: a successful `tools/list` proves the server is fine and
+says nothing about whether the model will accept the tools, the two failures
+look nothing alike from the agent's side, and the failure will not reproduce
+from an Anthropic- or OpenAI-routed group. It also gained the matching log
+signal for `API Error: 400 Provider returned error`.
+
+`/debug` carried the same lesson plus the now-wrong claim that container logs
+are unrecoverable after exit; it now points at `logs/containers/<session>/`
+first, documents the retention knobs, and warns against believing an agent's
+account of why a service is unreachable when it has just lost its tools.
+`/add-mealie-tool` had the same stale `--rm` sentence and was corrected.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Persist container logs and detect failing task-run streaks
 
 Two host-side observability changes, both prompted by the same incident: the

@@ -269,7 +269,7 @@ Log signals (`tail -100 logs/nanoclaw.log | grep -iE 'mealie|mcp'`):
   filtering at registration time for this fork/version; treat that as a
   fork bug, not something to prompt around.
 
-Container logs vanish on exit (`--rm`), so the host log is the only trail.
+Container stderr is kept at `logs/containers/<session>/` (the host log's `Container exited non-zero` line names the exact file); the host log carries the routing side.
 
 ## Removal
 

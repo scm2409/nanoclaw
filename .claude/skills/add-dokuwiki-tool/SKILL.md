@@ -231,8 +231,35 @@ Log signals (`tail -100 logs/nanoclaw.log | grep -iE 'dokuwiki|mcp-remote'`):
 - Agent says it has no DokuWiki tools → the server isn't in the `dokuwiki` subagent's `mcpServers`, or the subagent file doesn't exist yet — re-run Phase 4 and restart.
 - Agent reports "page updated" instead of "submitted for review" → the `dokuwiki-reviewqueue` skill isn't reaching the subagent's context (check `container.json` skills scope), or the subagent is reporting a `queued`/`updated` status as a publish.
 - Agent says a tool doesn't exist, or keeps retrying a save → its guidance is from before the capability allowlist. Re-run Phase 3 and re-check the subagent file: there is no `getPage`, no `savePage` and no `appendPage` on this endpoint.
+- `API Error: 400 Provider returned error` from the `dokuwiki` subagent, while a plain `tools/list` against the endpoint succeeds → **not a wiki problem.** The model provider rejected the tool declarations. See the check below.
 
-Container logs vanish on exit (`--rm`), so the host log is the only trail.
+Container stderr is kept at `logs/containers/<session>/` (the host log's `Container exited non-zero` line names the exact file); the host log carries the routing side.
+
+### Check the model provider actually accepts the tool schemas
+
+A successful MCP handshake means the *server* is fine. It says nothing about whether the *model* will accept the tools, and the two failures look nothing alike from the agent's side: the subagent dies before its first tool call with a generic `API Error: 400 Provider returned error`, and then — having no tools — reports that the wiki is unreachable. That sentence is a hallucination about the world, and it is convincing enough to send you at the wiki for two days.
+
+Google's Gemini validates function declarations strictly (`type: array` requires `items`; `INVALID_ARGUMENT` otherwise). Anthropic and OpenAI do not. And Google rejects the **whole** request, so one malformed tool disables all of them.
+
+The reviewqueue endpoint is clean today — 27 tools, no array-typed parameters at all — so this is a guard for when it grows, or for any other MCP server wired into a Gemini-routed group:
+
+```bash
+# every array-typed property must declare items
+curl -sS -X POST https://<wiki-host>/lib/plugins/reviewqueue/mcp.php \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' |
+  python3 -c '
+import json,sys
+def walk(s,name,path=""):
+    if not isinstance(s,dict): return
+    if s.get("type")=="array" and "items" not in s: print(f"MISSING items: {name}.{path}")
+    for k,v in (s.get("properties") or {}).items(): walk(v,name,f"{path}.{k}" if path else k)
+    walk(s.get("items") or {},name,path+"[]")
+for t in json.load(sys.stdin)["result"]["tools"]: walk(t.get("inputSchema") or {},t["name"])
+print("schema check done")'
+```
+
+Any `MISSING items` line means that tool will take the entire server down for a Gemini-routed agent. Fix it at the plugin, not by hand-patching one tool — and note the failure will not reproduce if you test the same wiki from an Anthropic- or OpenAI-routed group.
 
 ## Removal
 

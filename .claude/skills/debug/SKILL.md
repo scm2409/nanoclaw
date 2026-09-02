@@ -42,8 +42,15 @@ src/container-runner.ts                    container/agent-runner/src/
 | **Setup logs** | `logs/setup.log`, `logs/setup-steps/*.log` | Per-step install output (bootstrap, container, onecli, mounts, service) |
 | **Session inbound** | `data/v2-sessions/<group>/<session>/inbound.db` (`messages_in`) | Did the message reach the container? |
 | **Session outbound** | `data/v2-sessions/<group>/<session>/outbound.db` (`messages_out`) | Did the agent produce a reply? |
+| **Container stderr** | `logs/containers/<session>/<timestamp>-<container>.log` | Everything the container printed — one file per run |
 
-Containers run with `--rm`, so the container's own filesystem is gone after it exits. The host streams container **stderr** into `logs/nanoclaw.log` at debug level, tagged with `container=<group folder>`; raise the log level (below) to see it. If the agent silently failed inside an exited container, there is no persistent in-container log — reconstruct from the session DBs and the host log.
+Containers run with `--rm`, so the container's own filesystem is gone after it exits, but its **stderr is kept on the host** at `logs/containers/<session>/`, one file per container run. That is the first place to look when an agent failed silently: MCP server handshake results, provider errors, the poll loop's own trace. The host log's `Container exited non-zero` line names the exact file via `logPath`.
+
+The same lines also stream into `logs/nanoclaw.log` at debug level, tagged `container=<group folder>` — but the persisted file needs no log level raised and survives, so prefer it.
+
+Retention: newest 24 files per session, 7 days, 8 MiB per file — tune with `CONTAINER_LOG_KEEP_PER_SESSION`, `CONTAINER_LOG_MAX_AGE_DAYS`, `CONTAINER_LOG_MAX_BYTES`, or disable with `CONTAINER_LOGS=off`.
+
+**A healthy MCP handshake does not mean the tools work.** If a subagent dies with `API Error: 400 Provider returned error` before its first tool call, the model provider rejected the tool declarations — not the target service. Google's Gemini validates function declarations strictly (an `array` property must declare `items`) and rejects the whole request, so one malformed tool disables every tool on that server. The agent, now holding no tools, will report that the service is unreachable. Believe the container log, not that sentence.
 
 ## Enabling Debug Logging
 
