@@ -11,6 +11,33 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Log what the agent did, not only what it says it did
+
+The container log recorded `Progress:` and the final `Result:` — both of them
+the agent's own account of its turn. Twice in one session an agent reported
+shell output that did not match reality: a file's contents reconstructed from
+earlier context, and `EXIT=1` for a command that exited `0`. Both followed a
+context compaction, so the real tool result was gone while the plausible
+reconstruction survived. With only the agent's account in the log there was no
+way to tell "ran it and misreported" from "never ran it" — a distinction that
+matters a great deal, and one no amount of prompting can settle after the fact.
+
+The provider now yields `tool` and `tool_result` events, and the poll loop
+writes them to the container log verbatim: `Tool: Bash <command>` and
+`Tool result: <output>`. Tool results reach the transcript as synthetic user
+messages, which is the only place a command's actual output appears, so that is
+where this reads from. Both are bounded in the provider (4000 chars for a
+result, 2000 for an input summary) because they go to a log, not to the agent —
+and the container log has its own byte cap on top.
+
+`/debug` gained the operator half: an agent's summary of shell output is not
+evidence, and the three habits that help — redirect to files in the group
+workspace and read them from the host, one command per turn, and don't ask for
+something the agent already has in context. Only the first removes the problem;
+the other two reduce it.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Stop the Deck sweep from paying a model to learn nothing changed
 
 `container/skills/nextcloud-deck-workflow/SKILL.md` had a Review stage defined

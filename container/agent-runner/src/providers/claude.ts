@@ -201,6 +201,55 @@ function buildAgentDefinitions(
   return agents;
 }
 
+/** Longest tool-result excerpt written to the log. Generous enough for a
+ *  command's real output, bounded so one `cat` cannot dominate the file. */
+const TOOL_RESULT_PREVIEW_MAX = 4000;
+/** Bash commands are the point of this logging, so they are never trimmed
+ *  below this; other tools' inputs only need to be identifiable. */
+const TOOL_INPUT_SUMMARY_MAX = 2000;
+
+/** The command for Bash; a compact, identifiable rendering for anything else. */
+function summariseToolInput(name: string | undefined, input: unknown): string {
+  if (name === 'Bash' && input && typeof input === 'object') {
+    const cmd = (input as { command?: unknown }).command;
+    if (typeof cmd === 'string') return truncate(cmd, TOOL_INPUT_SUMMARY_MAX);
+  }
+  if (input === undefined || input === null) return '';
+  try {
+    return truncate(JSON.stringify(input), TOOL_INPUT_SUMMARY_MAX);
+  } catch {
+    return truncate(String(input), TOOL_INPUT_SUMMARY_MAX);
+  }
+}
+
+/** Tool results arrive either as a plain string or as SDK content blocks. */
+function previewToolResult(content: unknown): string {
+  let text: string;
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content
+      .map((b) =>
+        b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string'
+          ? (b as { text: string }).text
+          : '',
+      )
+      .filter(Boolean)
+      .join('\n');
+  } else {
+    try {
+      text = JSON.stringify(content ?? '');
+    } catch {
+      text = String(content);
+    }
+  }
+  return truncate(text, TOOL_RESULT_PREVIEW_MAX);
+}
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}… (truncated, ${text.length} chars)`;
+}
+
 /** Fixed target for the `fable` alias — no subagent tier maps to it. */
 const FABLE_ALIAS_MODEL = 'moonshotai/kimi-k3';
 
@@ -723,6 +772,26 @@ export class ClaudeProvider implements AgentProvider {
                 (block as { text: string }).text.trim().length > 0
               ) {
                 lastAssistantText = (block as { text: string }).text;
+              } else if (block && typeof block === 'object' && (block as { type?: string }).type === 'tool_use') {
+                const tu = block as { name?: string; input?: unknown };
+                yield { type: 'tool', name: tu.name ?? 'unknown', summary: summariseToolInput(tu.name, tu.input) };
+              }
+            }
+          }
+        } else if (message.type === 'user') {
+          // Tool results come back as a synthetic user message. This is the
+          // only place the transcript carries what a command actually
+          // printed, so it is the only place a log can record it.
+          const content = (message as { message?: { content?: unknown[] } }).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result') {
+                const tr = block as { content?: unknown; is_error?: boolean };
+                yield {
+                  type: 'tool_result',
+                  isError: tr.is_error === true,
+                  preview: previewToolResult(tr.content),
+                };
               }
             }
           }

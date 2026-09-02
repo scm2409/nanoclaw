@@ -163,6 +163,23 @@ export type ProviderEvent =
    */
   | { type: 'subagent'; subagentType: string; model: string; description?: string }
   /**
+   * A tool the agent invoked, and what it got back. These exist so the
+   * container log records what the agent actually *did*, independently of
+   * what it later says it did.
+   *
+   * The motivating incident: an agent reported shell output that did not
+   * match what the command produced -- a file's contents reconstructed from
+   * context, and an EXIT=1 for a command that exited 0. With only the
+   * agent's own account in the log, "ran it and misreported" was
+   * indistinguishable from "never ran it".
+   *
+   * `summary` is the command itself for Bash, and a compact rendering of the
+   * input for anything else. `preview` is bounded -- these go to a log, not
+   * to the agent.
+   */
+  | { type: 'tool'; name: string; summary: string }
+  | { type: 'tool_result'; isError: boolean; preview: string }
+  /**
    * Liveness signal. Providers MUST yield this on every underlying SDK
    * event (tool call, thinking, partial message, anything) so the
    * poll-loop's idle timer stays honest during long tool runs.

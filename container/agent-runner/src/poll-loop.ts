@@ -759,6 +759,16 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
     case 'progress':
       log(`Progress: ${event.message}`);
       break;
+    // Tool call and result go to the log verbatim (bounded by the provider).
+    // This is the independent record: everything else in this log is the
+    // agent's own account of its turn, which is exactly what cannot be
+    // trusted when the question is whether a command really ran.
+    case 'tool':
+      log(`Tool: ${event.name}${event.summary ? ` ${event.summary}` : ''}`);
+      break;
+    case 'tool_result':
+      log(`Tool result${event.isError ? ' (error)' : ''}: ${event.preview}`);
+      break;
     case 'subagent':
       log(`Subagent started: ${event.subagentType} (model: ${event.model})`);
       break;

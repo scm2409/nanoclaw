@@ -42,13 +42,42 @@ src/container-runner.ts                    container/agent-runner/src/
 | **Setup logs** | `logs/setup.log`, `logs/setup-steps/*.log` | Per-step install output (bootstrap, container, onecli, mounts, service) |
 | **Session inbound** | `data/v2-sessions/<group>/<session>/inbound.db` (`messages_in`) | Did the message reach the container? |
 | **Session outbound** | `data/v2-sessions/<group>/<session>/outbound.db` (`messages_out`) | Did the agent produce a reply? |
-| **Container stderr** | `logs/containers/<session>/<timestamp>-<container>.log` | Everything the container printed — one file per run |
+| **Container stderr** | `logs/containers/<session>/<timestamp>-<container>.log` | Everything the container printed — one file per run, including every tool call and its result |
 
 Containers run with `--rm`, so the container's own filesystem is gone after it exits, but its **stderr is kept on the host** at `logs/containers/<session>/`, one file per container run. That is the first place to look when an agent failed silently: MCP server handshake results, provider errors, the poll loop's own trace. The host log's `Container exited non-zero` line names the exact file via `logPath`.
 
 The same lines also stream into `logs/nanoclaw.log` at debug level, tagged `container=<group folder>` — but the persisted file needs no log level raised and survives, so prefer it.
 
 Retention: newest 24 files per session, 7 days, 8 MiB per file — tune with `CONTAINER_LOG_KEEP_PER_SESSION`, `CONTAINER_LOG_MAX_AGE_DAYS`, `CONTAINER_LOG_MAX_BYTES`, or disable with `CONTAINER_LOGS=off`.
+
+## Don't take the agent's word for what a command printed
+
+The container log records tool calls and their results (`Tool: Bash …`,
+`Tool result: …`) alongside the agent's own account of the turn. Use it: an
+agent's summary of shell output is not evidence. In one session an agent
+reported a file's contents that it had reconstructed from earlier context, and
+an `EXIT=1` for a command that exited `0`. Both times a context compaction had
+just run, so the real tool result was gone while the plausible reconstruction
+survived — and a model that lost a tool result to compaction has no way to know
+it lost it.
+
+Three habits that reduce it, in rough order of how much they buy:
+
+- **Take the report out of the model.** Redirect to files in the group
+  workspace and read them yourself:
+  ```bash
+  cmd > /workspace/agent/probe.out 2> /workspace/agent/probe.err; echo $? > /workspace/agent/probe.rc
+  ```
+  `/workspace/agent` is `groups/<folder>/`, so the bytes are on the host with
+  no agent in between. This is the only one of the three that removes the
+  problem rather than reducing it.
+- **One command per turn.** The fabrications followed multi-command chains
+  with `echo` markers; single commands in the same session came back correct.
+  A chain invites narration.
+- **Don't ask for something already in context.** "Show me the contents of X"
+  is least reliable exactly when the agent has seen X before — that is the
+  material it reconstructs from. Prefer a fresh session for verification;
+  a long one has more to confabulate with.
 
 **A healthy MCP handshake does not mean the tools work.** If a subagent dies with `API Error: 400 Provider returned error` before its first tool call, the model provider rejected the tool declarations — not the target service. Google's Gemini validates function declarations strictly (an `array` property must declare `items`) and rejects the whole request, so one malformed tool disables every tool on that server. The agent, now holding no tools, will report that the service is unreachable. Believe the container log, not that sentence.
 
