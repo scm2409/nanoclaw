@@ -101,7 +101,7 @@ there.
    Never use Anthropic aliases or names (`sonnet`, `fable`, `haiku`,
    `claude-sonnet-5`). An explicit `model` on the Task call is allowed only
    when the order requires it and names a complete approved OpenRouter model
-   (e.g. `google/gemini-3.7-flash`, `z-ai/glm-5.3-flash`, `openai/gpt-5.6-sol`).
+   (e.g. `google/gemini-3.8-flash`, `z-ai/glm-5.3-flash`, `openai/gpt-5.6-sol`).
 
 ## Web research: ALWAYS delegate to the `websearch` subagent
 

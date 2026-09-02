@@ -47,8 +47,8 @@ describe('buildModelAliasEnv', () => {
     writeAgentFile('coder', 'z-ai/glm-5.3-flash');
     writeAgentFile('smart', 'openai/gpt-5.6-sol');
 
-    expect(buildModelAliasEnv('google/gemini-3.7-flash', tmp)).toEqual({
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'google/gemini-3.7-flash',
+    expect(buildModelAliasEnv('google/gemini-3.8-flash', tmp)).toEqual({
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'google/gemini-3.8-flash',
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'z-ai/glm-5.3-flash',
       ANTHROPIC_SMALL_FAST_MODEL: 'z-ai/glm-5.3-flash',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'openai/gpt-5.6-sol',
@@ -57,16 +57,16 @@ describe('buildModelAliasEnv', () => {
   });
 
   it('falls back to the main model when coder/smart are absent', () => {
-    const env = buildModelAliasEnv('google/gemini-3.7-flash', tmp);
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('google/gemini-3.7-flash');
-    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('google/gemini-3.7-flash');
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('google/gemini-3.7-flash');
+    const env = buildModelAliasEnv('google/gemini-3.8-flash', tmp);
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('google/gemini-3.8-flash');
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe('google/gemini-3.8-flash');
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('google/gemini-3.8-flash');
     expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('moonshotai/kimi-k3');
   });
 
   it('ignores a subagent whose model is itself a bare alias', () => {
     writeAgentFile('coder', 'haiku');
-    const env = buildModelAliasEnv('google/gemini-3.7-flash', tmp);
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('google/gemini-3.7-flash');
+    const env = buildModelAliasEnv('google/gemini-3.8-flash', tmp);
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('google/gemini-3.8-flash');
   });
 });

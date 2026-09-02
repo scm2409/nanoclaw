@@ -1,6 +1,6 @@
 ---
 description: Performs Nextcloud operations — Deck (boards, stacks, cards, comments), calendar (events, tasks) and WebDAV files. Use for EVERY Nextcloud action, read or write. The calling agent has no Nextcloud tools of its own.
-model: google/gemini-3.7-flash
+model: google/gemini-3.8-flash
 tools: [Read, Write, Skill]
 mcpServers: [nextcloud]
 skills: [nextcloud-deck-workflow, nextcloud-deck-inbox]
