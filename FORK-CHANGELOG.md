@@ -11,6 +11,36 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Media writes are review-gated, so the guidance stops calling them an exception
+
+The `reviewqueue` plugin gained review gating for `core_saveMedia` and
+`core_deleteMedia`. Until now every piece of DokuWiki guidance in this fork
+carried the opposite claim — that media was the one part of the allowlist the
+queue did not cover, that it took effect immediately, and that the subagent
+should report such a change as done rather than as submitted. That is now wrong
+in the dangerous direction: it tells the agent a queued upload is already live.
+
+The container skill, its installed mirror, the `dokuwiki` subagent and the main
+agent's instructions now describe media writes as ordinary reviewable writes
+returning the same `status` / `pendingId` / `target` shape. The one thing that
+survives from the old wording is the restraint: an upload is never implied by a
+page edit, so media tools are only touched on an explicit order.
+
+The guidance is deliberately deployment-robust rather than assuming the new
+plugin everywhere. A wiki still running the older `reviewqueue` will apply a
+media write live, and it says so by returning no `status` and no `pendingId`.
+Both the skill and the subagent therefore instruct the agent to report the
+status it actually received instead of the one this document predicts, and the
+install skill tells the operator to verify the gating against the wiki being
+wired. At the time of writing, the wiki this install talks to still answers
+media writes straight from DokuWiki core, so that branch is not hypothetical.
+
+The guard test grew the five media tools in the exposed-tool list and a check
+that no guidance file carries the old exemption wording — the same drift guard
+the endpoint change got, applied to the claim that replaced it.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — A `browser` subagent, and what `websearch` does when a page is out of reach
 
 `websearch` reads pages; it cannot operate them. Content that only appears

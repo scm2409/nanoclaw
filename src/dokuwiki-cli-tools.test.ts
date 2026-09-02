@@ -45,6 +45,11 @@ const exposedTools = [
   'core_whoAmI',
   'core_listPages',
   'core_searchPages',
+  'core_listMedia',
+  'core_getMedia',
+  'core_getMediaInfo',
+  'core_saveMedia',
+  'core_deleteMedia',
   'plugin_reviewqueue_getPageToEdit',
   'plugin_reviewqueue_listMyPending',
   'plugin_reviewqueue_searchMyPending',
@@ -84,7 +89,8 @@ const removedTools = [
  * delegates the full contract to the skill, so it does not need to restate the
  * whole inventory — but it must not send the caller at a tool that is gone.
  */
-const subagentTools = exposedTools.filter((t) => t !== 'core_whoAmI' && t !== 'core_listPages');
+const nonPageTools = new Set(['core_whoAmI', 'core_listPages', 'core_listMedia', 'core_getMedia', 'core_getMediaInfo']);
+const subagentTools = exposedTools.filter((t) => !nonPageTools.has(t));
 
 const skillFiles = [
   'container/skills/dokuwiki-reviewqueue/SKILL.md',
@@ -140,5 +146,45 @@ describe('DokuWiki install skill targets the reviewqueue endpoint', () => {
       .filter((line) => line.includes('/lib/plugins/mcp/mcp.php'))
       .filter((line) => !line.includes('%{http_code}'));
     expect(stale, 'splitbrain endpoint still wired somewhere').toEqual([]);
+  });
+});
+
+/**
+ * Wording that claimed media writes bypass the review queue. The reviewqueue
+ * plugin now routes `core_saveMedia` and `core_deleteMedia` through the queue
+ * like any page write, so guidance carrying these phrases sends the subagent
+ * out to make an unreviewed live change it is no longer making.
+ */
+const staleMediaClaims = [
+  'Media is the exception',
+  'Media is the one exception',
+  'One exception to the review queue',
+  'never enter the queue',
+  'is not queued',
+  'not\nreviewed',
+  'act on the wiki **immediately**',
+  'return no `pendingId`',
+  'takes effect on the wiki immediately',
+];
+
+describe('media writes are documented as review-gated', () => {
+  it('carries no wording that exempts media from the queue', () => {
+    for (const file of [...guidanceFiles, 'groups/main-agent/instructions.prepend.md']) {
+      const content = read(file);
+      for (const claim of staleMediaClaims) {
+        expect(content, `${file} still claims: ${claim}`).not.toContain(claim);
+      }
+    }
+  });
+
+  it('tells the subagent to report what the write actually returned', () => {
+    for (const file of skillFiles) {
+      const content = read(file);
+      expect(content, `${file} missing core_saveMedia`).toContain('core_saveMedia');
+      expect(content, `${file} missing core_deleteMedia`).toContain('core_deleteMedia');
+      // The media section must describe the same queued/pendingId outcome the
+      // page writes have, not merely mention the word somewhere nearby.
+      expect(content, `${file} does not document media as queued`).toMatch(/core_saveMedia[\s\S]{0,1200}`queued`/);
+    }
   });
 });

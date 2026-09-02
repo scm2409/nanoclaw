@@ -53,9 +53,9 @@ not list, it does not exist. Do not retry it under another spelling.
 | Exact submitted text of one change | `plugin_reviewqueue_getPendingText` |
 
 Media tools (`core_listMedia`, `core_getMedia`, `core_getMediaInfo`,
-`core_saveMedia`, `core_deleteMedia`) are also available — see the warning at
-the bottom, they are the one part of this endpoint the review queue does **not**
-cover.
+`core_saveMedia`, `core_deleteMedia`) are also available. Writes among them are
+review-gated like page writes — see the media section near the bottom for the
+one judgement call they carry.
 
 ## The one rule
 
@@ -214,16 +214,26 @@ here: it only helps once you have picked the page.
   re-read the page and outline, then recompute.
 - `superseded` — replaced by a later change; cached ranges are invalid.
 
-## Media is the exception: it is not reviewed
+## Media goes through the queue too
 
-`core_saveMedia` and `core_deleteMedia` act on the wiki **immediately**. They
-return no `pendingId` and no `status`, because they never enter the queue — the
-review queue covers page text only.
+`core_saveMedia` and `core_deleteMedia` are reviewable writes like any page
+write. They return the same shape — `status` of `live` / `queued` / `updated`,
+plus `pendingId` and `target` — and a `queued` upload is not on the wiki until a
+human approves it. Track and report it exactly the way you report a page change,
+with its `pendingId`.
 
-So: do not upload or delete media unless you were explicitly told to, treat it as
-a live change to someone else's wiki, and report it as done rather than as
-submitted for review. Reading media (`core_listMedia`, `core_getMedia`,
-`core_getMediaInfo`) is harmless.
+Reading media (`core_listMedia`, `core_getMedia`, `core_getMediaInfo`) is a read
+like any other and needs nothing special.
+
+Two things still make media different from page text, and they are about
+judgement, not about the queue:
+
+- **Only on an explicit order.** Nobody asks for an upload by implication. If the
+  order did not name a file to upload or delete, do not touch these tools.
+- **Report the status you actually got.** If a media write comes back without a
+  `status` and without a `pendingId`, that wiki's plugin is not gating media
+  yet and the change is already live — say it is done, not that it is awaiting
+  review. Never infer the outcome from this document; read it off the response.
 
 ## Things that will mislead you if you forget them
 
