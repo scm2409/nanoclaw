@@ -124,6 +124,12 @@ Give the subagent a complete order — it does not see the conversation and
 starts from zero every time: which page (with namespace, if known), what
 exactly should change, verbatim.
 
+**One exception to the review queue: files.** Uploading or deleting a media
+file is not queued and takes effect on the wiki immediately. Only order that
+when Martin has actually asked for it, and report it as done rather than as
+submitted. Page text — including creating and deleting whole pages — always
+goes through the queue.
+
 **New pages belong linked.** If the subagent creates a new page, you tell it
 that it should also be linked from an existing page, so it stays reachable
 through normal navigation and does not end up an orphan. If Martin names no
