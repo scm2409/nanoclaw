@@ -17,6 +17,7 @@ import {
   TASKS_SYSTEM_THREAD_ID,
 } from './db/sessions.js';
 import { appendRunLog } from './modules/scheduling/run-log.js';
+import { recordRunOutcome } from './modules/scheduling/run-health.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroup, getMessagingGroupByPlatform } from './db/messaging-groups.js';
@@ -277,11 +278,16 @@ async function deliverMessage(
   if (msg.kind === 'task_log') {
     if (session.messaging_group_id === null && isTaskThread(session.thread_id) && session.thread_id) {
       const series = session.thread_id.slice(`${TASKS_SYSTEM_THREAD_ID}:`.length);
+      const text = typeof content.text === 'string' ? content.text : '';
       try {
-        appendRunLog(session.agent_group_id, series, typeof content.text === 'string' ? content.text : '');
+        appendRunLog(session.agent_group_id, series, text);
       } catch (err) {
         log.warn('Failed to append task run log', { id: msg.id, sessionId: session.id, err });
       }
+      // Streak accounting is separate from the append: a run whose log line
+      // fails to write still happened, and a series failing the same way every
+      // hour is exactly the case nobody was seeing. Never throws.
+      await recordRunOutcome(session.agent_group_id, series, text);
     } else {
       log.warn('task_log row outside a task session — ignoring', { id: msg.id, sessionId: session.id });
     }

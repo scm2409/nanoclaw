@@ -11,6 +11,53 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Persist container logs and detect failing task-run streaks
+
+Two host-side observability changes, both prompted by the same incident: the
+`dokuwiki` subagent failed on every hourly Deck sweep for 53 consecutive runs
+across two days, and nothing surfaced it. The agent misattributed the cause in
+its run log ("the DokuWiki endpoint is unreachable"), `ncl tasks list` reported
+`FAILED 0` throughout, and the decisive detail — the provider's own
+`error.metadata.raw`, naming the exact tool-schema field Google rejected — had
+been printed inside the container and then discarded. Diagnosing it took four
+live probes against the running system.
+
+New `src/container-logs.ts` writes each container's full stderr to
+`logs/containers/<session>/<timestamp>-<container>.log`. Containers still run
+with `--rm`; the ten-line `stderrTail` kept on a non-zero exit was the only
+survivor before, which shows that a container died and almost never why. Files
+are byte-capped so a looping container cannot fill the disk, and pruned per
+session on spawn (newest N, plus an age cutoff) so an hourly task series does
+not accumulate forever. Every function degrades to "no log written" rather than
+throwing — diagnostics must not be able to break a spawn. The
+`Container exited non-zero` warning now carries the `logPath`. Tunable via
+`CONTAINER_LOG_MAX_BYTES`, `CONTAINER_LOG_KEEP_PER_SESSION`,
+`CONTAINER_LOG_MAX_AGE_DAYS`, `CONTAINER_LOGS=off`.
+
+New `src/modules/scheduling/run-health.ts` counts consecutive failing runs per
+task series in a new `task_run_health` table (migration 022) and DMs an admin
+once when a streak crosses its threshold — three runs, or twelve for provider
+rate limits, since the owner's standing instruction is that the five-hour token
+window resets on its own and must not prompt a question. One notification per
+distinct failure: the streak keeps climbing silently afterwards, and a changed
+failure or a healthy run re-arms it. `ncl tasks list` and `tasks get` gained a
+`HEALTH` column carrying the streak, because `FAILED` counts only runs the
+container never completed and therefore stays at zero while a series fails
+every hour.
+
+What counts as a failure is deliberately narrow: only markers emitted by the
+runner or the provider (`API Error: <status>`, the spend-limit and rate-limit
+stops). Model-authored prose is explicitly not a signal — it is phrased
+differently every run, changes language, and in this incident stated a
+confident and wrong cause. Matching on it would have produced both false alarms
+on healthy no-op runs and false confidence about why. Notification routing
+reuses the approvals path (scoped admins, then global admins, then owners), so
+there is no separate alert address to configure and get wrong. The detector
+lives on the host rather than in the agent on purpose: an agent that is broken
+cannot be relied on to report that it is broken.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-01 — Point the DokuWiki subagent at the reviewqueue plugin's own MCP endpoint
 
 The wiki's MCP surface moved. It used to be `splitbrain/dokuwiki-plugin-mcp` at

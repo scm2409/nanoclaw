@@ -127,7 +127,7 @@ describe('tasks CLI resource', () => {
     // once and ships it as `human`, so the Bun container prints the aligned
     // table instead of a raw column dump (it cannot import the host formatter).
     expect(resp.human).toBeDefined();
-    expect(resp.human).toMatch(/SERIES\s+SCHEDULE\s+RUNS\s+FAILED\s+LAST RUN\s+NEXT RUN/);
+    expect(resp.human).toMatch(/SERIES\s+SCHEDULE\s+RUNS\s+FAILED\s+HEALTH\s+LAST RUN\s+NEXT RUN/);
     expect(resp.human).toContain('briefing-');
   });
 
@@ -524,7 +524,9 @@ describe('formatTasksTable', () => {
 
   it('renders an aligned table with run history', () => {
     const lines = formatTasksTable(rows, now).split('\n');
-    expect(lines[0]).toMatch(/SERIES\s+SCHEDULE\s+RUNS\s+FAILED\s+LAST RUN\s+NEXT RUN\s+STATUS\s+AGE\s+PROMPT/);
+    expect(lines[0]).toMatch(
+      /SERIES\s+SCHEDULE\s+RUNS\s+FAILED\s+HEALTH\s+LAST RUN\s+NEXT RUN\s+STATUS\s+AGE\s+PROMPT/,
+    );
     expect(lines[1]).toContain('1h'); // AGE column — created 1h ago
     expect(lines[1]).toContain('task-5bbe082a-6298-4699'); // FULL series id — copy-pasteable into `tasks get --id`
     expect(lines[1]).toContain('* * * * *');
@@ -551,6 +553,18 @@ describe('formatTasksTable', () => {
     expect(oneShot).toContain('once');
     expect(oneShot).toMatch(/\bdue\b/); // next_run in the past → due
     expect(oneShot).toContain('-'); // last_run '-' (never fired)
+  });
+
+  // A run that reports it cannot do its job is not a `failed_run`, so FAILED
+  // stays 0 while a series fails every hour. HEALTH is the column that says so.
+  it('shows the failure streak separately from failed_runs', () => {
+    const line = formatTasksTable([{ ...rows[0], failed_runs: 0, health: 'api-error:400 ×53' }], now).split('\n')[1];
+    expect(line).toContain('api-error:400 ×53');
+  });
+
+  it('shows ok when the series has no active failure streak', () => {
+    const line = formatTasksTable([{ ...rows[0], health: 'ok' }], now).split('\n')[1];
+    expect(line).toMatch(/\bok\b/);
   });
 });
 

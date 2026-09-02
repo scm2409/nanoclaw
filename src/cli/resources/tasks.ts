@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 
 import { GROUPS_DIR } from '../../config.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
+import { getDb, hasTable } from '../../db/connection.js';
 import {
   findTaskSessions,
   getActiveSessions,
@@ -21,6 +22,7 @@ import {
   updateTask,
   type TaskUpdate,
 } from '../../modules/scheduling/db.js';
+import { getRunHealth } from '../../modules/scheduling/run-health.js';
 import {
   createScheduledTask,
   enforceRecurrenceLimit,
@@ -272,8 +274,32 @@ function enrichListRow(db: Database.Database, base: ReturnType<typeof toOutput>)
     failed_runs: stats.failed_runs,
     last_run: stats.last_run,
     next_run: base.process_after,
+    health: runHealthLabel(base.agent_group_id, seriesKey),
     log: `tasks/${seriesKey}.md`,
   };
+}
+
+/**
+ * A run that reports it could not do its job is not a `failed_run` — that
+ * counts only rows the container never completed. So a series can sit at
+ * `failed_runs: 0` while failing every single hour, which is exactly what
+ * happened. This column carries the streak so the table stops lying.
+ */
+function runHealthLabel(agentGroupId: string, seriesKey: string): string {
+  const row = safeRunHealth(agentGroupId, seriesKey);
+  if (!row || row.streak === 0 || !row.signature) return 'ok';
+  return `${row.signature} ×${row.streak}`;
+}
+
+function safeRunHealth(agentGroupId: string, seriesKey: string) {
+  // Tolerate an install that hasn't run migration 022 yet, and the in-memory
+  // DBs some tests build by hand.
+  try {
+    if (!hasTable(getDb(), 'task_run_health')) return undefined;
+    return getRunHealth(agentGroupId, seriesKey);
+  } catch {
+    return undefined;
+  }
 }
 
 function listTasks(args: Record<string, unknown>, ctx: CallerContext) {
@@ -304,6 +330,7 @@ function getTask(args: Record<string, unknown>, ctx: CallerContext) {
         origin_session_id: content.originSessionId,
         completed_runs: stats.runs,
         failed_runs: stats.failed_runs,
+        health: runHealthLabel(session.agent_group_id, seriesKey),
         recent_log: tailRunLog(session.agent_group_id, seriesKey),
       };
     });

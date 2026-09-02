@@ -15,12 +15,15 @@ interface TaskListRow {
   last_run?: string | null;
   next_run?: string | null;
   status?: string;
+  /** Failure-streak label from the run-health tracker: 'ok' or '<signature> ×<n>'. */
+  health?: string | null;
   log?: string | null;
   created_at?: string | null;
   prompt?: string | null;
 }
 
-const COLS = ['SERIES', 'SCHEDULE', 'RUNS', 'FAILED', 'LAST RUN', 'NEXT RUN', 'STATUS', 'AGE', 'PROMPT'] as const;
+// prettier-ignore
+const COLS = ['SERIES', 'SCHEDULE', 'RUNS', 'FAILED', 'HEALTH', 'LAST RUN', 'NEXT RUN', 'STATUS', 'AGE', 'PROMPT'] as const;
 
 function parseMs(iso: string): number {
   return Date.parse(/[Z+]|[+-]\d\d:\d\d$/.test(iso) ? iso : iso + 'Z');
@@ -68,6 +71,7 @@ export function formatTasksTable(rows: TaskListRow[], now: number = Date.now()):
     r.schedule || 'once',
     String(r.runs ?? 0),
     String(r.failed_runs ?? 0),
+    r.health || 'ok',
     lastRun(r.last_run, now),
     nextRun(r.next_run, now),
     r.status ?? '-',

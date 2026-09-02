@@ -28,6 +28,7 @@ import { updateContainerConfigScalars } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
+import { openContainerLog, pruneContainerLogs } from './container-logs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { initGroupFilesystem } from './group-init.js';
@@ -171,6 +172,13 @@ async function spawnContainer(session: Session): Promise<void> {
   activeContainers.set(session.id, { process: container, containerName });
   markContainerRunning(session.id);
 
+  // Persist the container's full stderr. `--rm` means the container's own logs
+  // are gone the instant it exits, and the tail below keeps ten lines — enough
+  // to see that something died, rarely enough to see why. Pruned here rather
+  // than on a timer: one readdir per spawn, no extra scheduling.
+  pruneContainerLogs(session.id);
+  const containerLog = openContainerLog(session.id, containerName);
+
   // Log stderr. A container that dies at boot (unknown provider, missing
   // binary, bad config) explains itself only here — and debug is below the
   // default log level — so keep a tail to surface on a non-zero exit.
@@ -179,6 +187,7 @@ async function spawnContainer(session: Session): Promise<void> {
     for (const line of data.toString().trim().split('\n')) {
       if (!line) continue;
       log.debug(line, { container: agentGroup.folder });
+      containerLog?.write(line);
       stderrTail.push(line);
       if (stderrTail.length > 10) stderrTail.shift();
     }
@@ -196,9 +205,17 @@ async function spawnContainer(session: Session): Promise<void> {
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
+    containerLog?.close(`exited code=${code}`);
     // code null = killed by signal (normal shutdown path), not a boot failure.
+    // The tail is a preview; `logPath` points at the whole thing.
     if (code !== 0 && code !== null && stderrTail.length > 0) {
-      log.warn('Container exited non-zero', { sessionId: session.id, code, containerName, stderrTail });
+      log.warn('Container exited non-zero', {
+        sessionId: session.id,
+        code,
+        containerName,
+        logPath: containerLog?.path,
+        stderrTail,
+      });
     } else {
       log.info('Container exited', { sessionId: session.id, code, containerName });
     }
@@ -208,6 +225,7 @@ async function spawnContainer(session: Session): Promise<void> {
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
+    containerLog?.close(`spawn error: ${String(err)}`);
     log.error('Container spawn error', { sessionId: session.id, err });
   });
 }

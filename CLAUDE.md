@@ -286,8 +286,11 @@ Check these first when something goes wrong:
 | Host logs | `logs/nanoclaw.error.log` first (delivery failures, crash-loop backoff, warnings), then `logs/nanoclaw.log` for the full routing chain |
 | Setup logs | `logs/setup.log` (overall), `logs/setup-steps/*.log` (per-step: bootstrap, environment, container, onecli, mounts, service, etc.) |
 | Session DBs | `data/v2-sessions/<agent-group>/<session>/` — `inbound.db` (`messages_in`: did the message reach the container?), `outbound.db` (`messages_out`: did the agent produce a response?) |
+| Container logs | `logs/containers/<session>/<timestamp>-<container>.log` — the container's full stderr, one file per run. The host log's `Container exited non-zero` line carries the exact `logPath` |
 
-Note: container logs are lost after the container exits (`--rm` flag). If the agent silently failed inside the container, there's no persistent log to inspect.
+Containers still run with `--rm`, so the runtime's own logs vanish on exit; `logs/containers/` is the host-side copy of everything the container printed to stderr. Files are capped (`CONTAINER_LOG_MAX_BYTES`, default 8 MiB) and pruned per session (`CONTAINER_LOG_KEEP_PER_SESSION`, default 24; `CONTAINER_LOG_MAX_AGE_DAYS`, default 7). Set `CONTAINER_LOGS=off` to disable.
+
+Recurring-task failures: `ncl tasks list` has a `HEALTH` column carrying the consecutive-failure streak (e.g. `api-error:400 ×53`). `FAILED` counts only runs the container never completed, so a series that cleanly reports it is blocked every hour still shows `FAILED 0` — `HEALTH` is the column that catches that. After three consecutive identical failures (twelve for provider rate limits, which clear themselves) the host DMs an admin once; see `src/modules/scheduling/run-health.ts`.
 
 ## Timestamps
 
