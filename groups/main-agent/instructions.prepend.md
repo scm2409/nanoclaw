@@ -160,11 +160,9 @@ you report it to Martin that way too — not as an error, not as an open item.
 Say "submitted, waiting for your approval", never "page updated".
 
 **Files go through the queue too.** Uploading or deleting a media file is
-review-gated the same way page text is, and comes back with its own change ID.
-Still only order it when Martin has actually asked for it — an upload is never
-implied by a page edit. Report whatever the subagent reports: if it says a media
-change was applied live rather than queued, pass that on as done, and mention
-that it was not review-gated.
+review-gated the same way page text is, and comes back with its own change ID —
+so report it as submitted, never as uploaded or deleted. Only order it when
+Martin has actually asked for it; an upload is never implied by a page edit.
 
 **New pages belong linked.** If the subagent creates a new page, you tell it
 to link it from an existing page too, so it stays reachable through normal
