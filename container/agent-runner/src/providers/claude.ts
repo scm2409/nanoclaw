@@ -87,7 +87,19 @@ export function classifyRateLimitEvent(
 //   headless container (~9.3KB/turn schema).
 // - ReportFindings: code-review-reporting UI affordance with no headless
 //   host surface to receive it (~1.9KB/turn schema).
-const SDK_DISALLOWED_TOOLS = [
+// - Workflow: multi-agent orchestration that may spawn dozens of agents, and
+//   by its own description only on explicit user opt-in — which a chat agent
+//   never receives. Its schema is 21.3KB, 37% of the whole tool surface, and
+//   ~18.8KB of that is prose about when not to call it.
+// - TaskCreate / TaskUpdate / TaskList / TaskGet: the CLI's interactive
+//   to-do list ("a structured task list for your current coding session").
+//   NanoClaw's own durable scheduling is `ncl tasks`, and there is no
+//   terminal here to render a progress list into. 8.7KB between them.
+//
+// Workflow and the four Task list tools were measured, not guessed: across
+// 7,513 recorded tool calls in this install's whole history, they were used
+// zero times. See docs/llm-trace.md for how to re-measure.
+export const SDK_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
   'CronList',
@@ -99,6 +111,11 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitWorktree',
   'DesignSync',
   'ReportFindings',
+  'Workflow',
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -106,7 +123,18 @@ const SDK_DISALLOWED_TOOLS = [
 // added via `add_mcp_server` (or wired in container.json directly) is
 // reachable to the agent — without this, the SDK's allowedTools filter
 // silently drops every MCP namespace not listed here.
-const TOOL_ALLOWLIST = [
+//
+// These names track the CLI's, and the CLI renames tools between versions.
+// A stale entry fails silently in the worst way: the list still reads as
+// authoritative while naming something that no longer exists, and a tool the
+// agent genuinely uses sits outside it. That had happened by 2.1.197 — `Task`,
+// `TeamCreate`, `TeamDelete` and `TodoWrite` were gone from the wire, while
+// `Agent`, the tool behind all 203 recorded subagent calls, was missing here.
+// The fix is to read the names off a real request rather than off memory:
+// enable the wire trace, take the `tools` array out of one record, and pin it
+// in claude.tool-surface.test.ts. See docs/llm-trace.md.
+export const TOOL_ALLOWLIST = [
+  'Agent',
   'Bash',
   'Read',
   'Write',
@@ -115,13 +143,9 @@ const TOOL_ALLOWLIST = [
   'Grep',
   'WebSearch',
   'WebFetch',
-  'Task',
   'TaskOutput',
   'TaskStop',
-  'TeamCreate',
-  'TeamDelete',
   'SendMessage',
-  'TodoWrite',
   'ToolSearch',
   'Skill',
   'NotebookEdit',

@@ -11,6 +11,47 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Drop five tool schemas the agent never once called
+
+First finding from the wire trace, and it is embarrassing in the useful way.
+Every request carried 28 tool schemas totalling 57,413 characters — roughly 14k
+of a 31.5k-token prefix. `Workflow` alone was 21.3 KB, 37% of the whole tool
+surface, of which 18.8 KB is prose explaining when *not* to call it (its own
+rule: only on explicit user opt-in to multi-agent orchestration, which a chat
+agent never gives). Beside it sat the CLI's interactive to-do list —
+`TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` — describing itself as "a
+structured task list for your current coding session", in a container with no
+terminal to render one and with `ncl tasks` already providing durable
+scheduling.
+
+Counted across every transcript this install has written: 7,513 tool calls, of
+which those five account for **zero**. They now sit in `SDK_DISALLOWED_TOOLS`,
+the list that demonstrably keeps a schema off the wire — none of its existing
+entries appear in a trace. That removes 30,031 characters, about 24% of the
+prompt prefix, from every call.
+
+It only matters this much because prompt caching is not currently doing
+anything on this provider. The CLI sets its `cache_control` breakpoints
+correctly — verified on a real request, two on the system blocks and one on the
+last message — but Gemini via OpenRouter returns `cache_read_input_tokens`
+equal to `cache_creation_input_tokens` and bills $0.867/M against a $0.75/M
+list input price: more than uncached input, and roughly 11× what a real cache
+read would cost. So a schema that ought to be nearly free to re-send is paid
+for in full every time. Anthropic-hosted models on the same OpenRouter
+connection cache normally, so this is Gemini's shim rather than OpenRouter as
+such. Trimming the tool surface is a workaround for that, not a fix.
+
+`TOOL_ALLOWLIST` was stale in both directions and is corrected: `Task`,
+`TeamCreate`, `TeamDelete` and `TodoWrite` no longer exist on the wire, while
+`Agent` — the tool behind all 203 recorded subagent calls — was missing from
+it. A list like this fails silently, so `claude.tool-surface.test.ts` pins the
+names actually observed in a trace and fails when they drift, and the header
+comment says to re-read them from a record after a CLI bump rather than from
+memory. The root `CLAUDE.md` carries the warning where someone debugging "the
+agent says it has no such tool" will actually walk into it.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — LLM wire trace
 
 A day's spend on one Matrix conversation was six times what the session

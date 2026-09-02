@@ -338,6 +338,25 @@ This project uses pnpm with `minimumReleaseAge: 10080` (7 days) in `pnpm-workspa
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
 
+## ⚠️ Agent Tool Surface — read this before debugging "the agent can't do X"
+
+**Two lists in `container/agent-runner/src/providers/claude.ts` decide which tools the agent has. If a tool is unexpectedly missing, or the agent claims it has no such tool, look here first.**
+
+| List | Effect |
+|------|--------|
+| `SDK_DISALLOWED_TOOLS` | Removes the tool: its schema is not sent, and `preToolUseHook` blocks the call as defense-in-depth. **This is the list that demonstrably works** — none of its entries appear in a wire trace. |
+| `TOOL_ALLOWLIST` | Passed as the SDK's `allowedTools`; MCP namespaces are appended at the call site. |
+
+**Disallowed for cost, not safety** (added 2026-09-02, measured — see [docs/llm-trace.md](docs/llm-trace.md)): `Workflow`, `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, alongside the earlier `DesignSync` / `ReportFindings`.
+
+`Workflow` alone was 21.3 KB of schema — 37% of the whole tool surface — and across **7,513 recorded tool calls in this install's entire history those five were used zero times**. Every schema is re-sent on every API call, so they were pure recurring cost.
+
+**To get one back**, remove it from `SDK_DISALLOWED_TOOLS` — but know the price: reinstating `Workflow` adds ~5k tokens to every request this group ever makes.
+
+**Tool names drift between CLI versions, and a stale entry fails silently.** The list keeps reading as authoritative while naming a tool that no longer exists. By CLI 2.1.197 `Task`, `TeamCreate`, `TeamDelete` and `TodoWrite` were gone from the wire, while `Agent` — behind all 203 recorded subagent calls — was missing from the allowlist. After a CLI bump, do not edit these lists from memory: turn on the wire trace, take the `tools` array out of one record, and update `claude.tool-surface.test.ts`, which pins the observed names and fails when they drift.
+
+**Why this matters more than it should: prompt caching currently saves nothing on Gemini via OpenRouter.** The CLI sets its `cache_control` breakpoints correctly (verified on a real request), but the provider returns `cache_read_input_tokens == cache_creation_input_tokens` and bills ~$0.867/M against a $0.75/M list input price — more than uncached input, roughly 11× what a real cache read would cost. Anthropic-hosted models on the same OpenRouter connection cache normally. On a working cache, tool-surface size would be a rounding error.
+
 ## Container Runtime (Bun)
 
 The agent container runs on **Bun**; the host runs on **Node** (pnpm). They communicate only via session DBs — no shared modules. Details and rationale: [docs/build-and-runtime.md](docs/build-and-runtime.md).
