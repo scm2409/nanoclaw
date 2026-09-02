@@ -46,6 +46,27 @@ If a board doesn't have a Review stack yet and you find yourself needing
 one, say so rather than silently working around the gap (e.g. by leaving a
 card in Doing and hoping nobody re-triggers it).
 
+**Blocked cards go to Review, not back into the queue.** If the same card
+fails the same way on three consecutive runs — a tool that won't answer, a
+credential that won't authenticate, an approval that never lands, a question
+nobody replied to — stop retrying it. Post a comment carrying the *raw* error
+text (not your interpretation of it, which is often wrong about the cause),
+what you tried, and what would unblock it. Then move the card to Review and
+say so once in chat.
+
+This is the rule that stops a blocker from quietly costing money forever. A
+card left in Doing gets picked up by every later run, and a blocker that
+survived three attempts will survive the fourth; the twentieth attempt buys
+nothing and looks, from the outside, exactly like an agent that is working.
+Review is where a card waits for the human it actually needs. Do not move it
+back yourself — the normal Review rules apply, and only the user releases it.
+
+Count the attempts somewhere that survives a run: a short note per blocked
+card under `memory/`, holding the card id, the error signature and the count.
+The run log is not the place for it — it grows without bound and you would be
+re-reading a whole history to answer one question. If you find no note, this
+is attempt one.
+
 **Reopening.** If a card sitting in Review or Done gets a new, unresolved
 open item — a new sub-task, a follow-up request, anything that still needs
 work — move it back to **Doing** as part of the same action that adds the

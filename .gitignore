@@ -27,6 +27,12 @@ groups/*/*
 !groups/*/.claude/
 groups/*/.claude/*
 !groups/*/.claude/agents/
+# Operational scripts belong with the group config that is tracked (personas,
+# subagent files): they are reviewed and versioned, not personal state. Their
+# install-specific values live in an untracked .env beside them, so no host,
+# account or board id reaches this public repo.
+!groups/*/scripts/
+groups/*/scripts/*.env
 
 # Runtime lock written by the scheduled-tasks hook. It was tracked once by
 # accident and then showed up as a pending deletion in every session.

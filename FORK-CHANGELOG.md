@@ -11,6 +11,47 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Stop the Deck sweep from paying a model to learn nothing changed
+
+`container/skills/nextcloud-deck-workflow/SKILL.md` had a Review stage defined
+as "a card that needs the user's eyes before further work" and a hard rule that
+nothing may touch a card already sitting there — but no rule for *entering*
+Review because of a blocker. So a card that produced nothing at all, because a
+tool would not answer, never qualified: it stayed in Doing and every later run
+picked it up again. One card did that 53 times across two days.
+
+The new rule: three consecutive failures with the same signature end the
+retrying. Comment the raw error text — explicitly not the agent's reading of
+it, which in the incident was a confident and wrong claim that the wiki was
+down — plus what was tried and what would unblock it, move the card to Review,
+say it once in chat. Attempts are counted in a per-card note under `memory/`
+rather than in the run log, which grows without bound and would mean re-reading
+a whole history to answer one question.
+
+This is the agent-side half of the host-side streak detector added earlier
+today. The host notices and reports; only the agent can move the card out of
+the queue that keeps re-selecting it.
+
+The other half of the waste was the sweep itself: it woke a model every hour to
+ask a two-card board whether anything had happened. `groups/main-agent/scripts/deck-sweep-gate.sh`
+is now a pre-agent gate — it queries the Deck REST API directly and returns
+`{"wakeAgent": false}` when the watched stacks are unchanged or empty, which
+ends the run before any model call. When something did change it returns the
+changed cards' ids and titles, so the agent starts from that list instead of
+re-listing the board.
+
+`groups/*/scripts/` became a tracked path, alongside `instructions.prepend.md`
+and `.claude/agents/`: an operational script is reviewed and versioned config,
+not personal state. Its install-specific values (host, account, board and stack
+ids) live in an untracked `deck-sweep-gate.env` beside it, because this repo is
+public and no tracked group file names a real host today. The config path is a
+fixed container path rather than being derived from `BASH_SOURCE` — the runner
+copies task scripts to `/tmp` before executing them, so the path a task script
+runs from says nothing about where it lives, and deriving it there would have
+failed every run until the series auto-paused.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Teach the skills that a healthy MCP handshake is not a working tool set
 
 Follow-up to the container-log and run-health change, and to the incident
