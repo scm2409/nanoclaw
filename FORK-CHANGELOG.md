@@ -11,6 +11,38 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Search queries get a language, and the agent gets a locale
+
+Nothing in the main agent's instructions or in the `websearch` subagent said
+which language to search in. The subagent's only language rule covered its
+reply ("Reply in the language of the request"), never its queries, so with an
+English order it searched in English by default — the wrong choice for an
+Austrian shop, a `.de` price comparison, or a German forum thread about a
+product sold here.
+
+`websearch.md` now picks its query language from the subject instead of from
+the order: German for anything tied to the German-speaking area (shops,
+prices, sellers, law, authorities, opening hours, local news and the forum
+threads about them), with Austria as the default frame and `.at`/`.de` sources
+preferred; English for internationally-scoped subjects like documentation,
+standards and releases; both where the two cover different ground, searched
+separately and merged. A German query is written the way people here would
+type it, not translated word-for-word from the English one. Its replies stay
+in the language of the order, as before.
+
+The locale that rule leans on is now stated once in
+`instructions.prepend.md`, for the main agent's own output as much as for the
+orders it writes: Austria as the default frame for anything with a place in
+it, country named whenever a statement could differ, and metric units
+throughout — imperial figures converted out of sources rather than passed
+through, with inches left alone where they are the locally normal unit anyway
+(display and TV diagonals, wheel and tyre sizes, threads, bike sizes). The
+websearch section also picked up a note to name the region in the order when
+it matters, since the order is all the subagent sees. `nanoclaw-overview.md`
+was updated to match.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Media writes are queued, and they say so by throwing
 
 The previous DokuWiki entry recorded `core_saveMedia` and `core_deleteMedia` as
