@@ -53,9 +53,9 @@ not list, it does not exist. Do not retry it under another spelling.
 | Exact submitted text of one change | `plugin_reviewqueue_getPendingText` |
 
 Media tools (`core_listMedia`, `core_getMedia`, `core_getMediaInfo`,
-`core_saveMedia`, `core_deleteMedia`) are also available. Writes among them are
-review-gated like page writes — see the media section near the bottom for the
-one judgement call they carry.
+`core_saveMedia`, `core_deleteMedia`) are also available. The two writes among
+them are review-gated like page writes, but they report that differently — see
+the media section near the bottom before you use either.
 
 ## The one rule
 
@@ -214,26 +214,36 @@ here: it only helps once you have picked the page.
   re-read the page and outline, then recompute.
 - `superseded` — replaced by a later change; cached ranges are invalid.
 
-## Media goes through the queue too
+## Media: queued too, but it reports that as an error
 
-`core_saveMedia` and `core_deleteMedia` are reviewable writes like any page
-write. They return the same shape — `status` of `live` / `queued` / `updated`,
-plus `pendingId` and `target` — and a `queued` upload is not on the wiki until a
-human approves it. Track and report it exactly the way you report a page change,
-with its `pendingId`.
+`core_saveMedia` and `core_deleteMedia` go through the review queue like every
+page write. What is different is how they tell you: core's own methods have no
+result channel for this, so the plugin signals the queue by **throwing**. A
+queued media write therefore comes back as an error, and that error is the
+success path:
+
+> Your change to 'logo.png' was submitted for review as change #42. It is NOT live yet.
+
+> Deletion of 'logo.png' was submitted for review as change #43. The file is NOT deleted yet.
+
+Take the change id out of that message and report it the way you report a queued
+page change. **Do not retry it**, and do not tell the user the file was uploaded
+or deleted — it is neither until a human approves.
+
+This is the one place where the "every write returns a status" rule above does
+not hold. Page writes return `status: "queued"` / `"updated"`; media writes throw
+one of the two messages instead. Neither carries a `status` field, and the
+absence of one means nothing here.
+
+Anything else those two return **is** a real failure. In particular
+`Failed to delete media file` means the deletion neither happened nor was
+queued — that one is worth escalating.
 
 Reading media (`core_listMedia`, `core_getMedia`, `core_getMediaInfo`) is a read
 like any other and needs nothing special.
 
-Two things still make media different from page text, and they are about
-judgement, not about the queue:
-
-- **Only on an explicit order.** Nobody asks for an upload by implication. If the
-  order did not name a file to upload or delete, do not touch these tools.
-- **Report the status you actually got.** If a media write comes back without a
-  `status` and without a `pendingId`, that wiki's plugin is not gating media
-  yet and the change is already live — say it is done, not that it is awaiting
-  review. Never infer the outcome from this document; read it off the response.
+**Only on an explicit order.** Nobody asks for an upload by implication. If the
+order did not name a file to upload or delete, do not touch these tools at all.
 
 ## Things that will mislead you if you forget them
 

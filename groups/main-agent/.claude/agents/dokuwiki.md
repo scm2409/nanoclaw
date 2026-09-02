@@ -57,11 +57,14 @@ draft in full (escape hatch only, the range tools already continue it);
 and needs no reviewer. Check state with `plugin_reviewqueue_listMyPending`,
 `plugin_reviewqueue_getStatus` and `plugin_reviewqueue_getPendingText`.
 
-Media writes go through the queue as well: `core_saveMedia` and
-`core_deleteMedia` return the same `status` / `pendingId` / `target` shape. Do not
-touch them unless the order explicitly says to — an upload is never implied — and
-report the status you actually got back, not the one you expected. A media write
-that returns no `status` and no `pendingId` was applied live; say so plainly.
+Media writes are queued too, but they are the exception to the status rule:
+`core_saveMedia` and `core_deleteMedia` have no result channel, so a queued
+media write comes back as an **error** reading `submitted for review as change
+#N` (`... It is NOT live yet.` / `... The file is NOT deleted yet.`). That error
+is the success path — take the change id from it and do not retry. Only
+`Failed to delete media file`, or anything else they return, is a genuine
+failure. Do not touch either tool unless the order explicitly says to; an upload
+is never implied by a page edit.
 
 Do not copy a full page into the report; for genuinely large content use
 workspace files and report the path plus metadata.

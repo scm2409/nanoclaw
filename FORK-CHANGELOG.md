@@ -11,33 +11,43 @@ the entry format and how this file is kept up to date.
 
 ---
 
-## 2026-09-02 — Media writes are review-gated, so the guidance stops calling them an exception
+## 2026-09-02 — Media writes are queued, and they say so by throwing
 
-The `reviewqueue` plugin gained review gating for `core_saveMedia` and
-`core_deleteMedia`. Until now every piece of DokuWiki guidance in this fork
-carried the opposite claim — that media was the one part of the allowlist the
-queue did not cover, that it took effect immediately, and that the subagent
-should report such a change as done rather than as submitted. That is now wrong
-in the dangerous direction: it tells the agent a queued upload is already live.
+The previous DokuWiki entry recorded `core_saveMedia` and `core_deleteMedia` as
+the one part of the capability allowlist the review queue did not cover — that
+they changed the wiki immediately and should be reported as done rather than as
+submitted. That was wrong. The `reviewqueue` plugin hooks `MEDIA_UPLOAD_FINISH`
+and `MEDIA_DELETE_FILE` and holds both for review like any page write.
 
-The container skill, its installed mirror, the `dokuwiki` subagent and the main
-agent's instructions now describe media writes as ordinary reviewable writes
-returning the same `status` / `pendingId` / `target` shape. The one thing that
-survives from the old wording is the restraint: an upload is never implied by a
-page edit, so media tools are only touched on an explicit order.
+The finding that looked like evidence to the contrary was a probe artifact.
+Both hooks are `BEFORE` hooks, so a write DokuWiki core rejects earlier — an
+upload with a forbidden extension, a delete of a file that does not exist —
+never reaches them. Those are exactly the two calls that are safe to make
+against a live wiki, which is why they were the ones tried, and their core-level
+refusals read as "the queue is not involved".
 
-The guidance is deliberately deployment-robust rather than assuming the new
-plugin everywhere. A wiki still running the older `reviewqueue` will apply a
-media write live, and it says so by returning no `status` and no `pendingId`.
-Both the skill and the subagent therefore instruct the agent to report the
-status it actually received instead of the one this document predicts, and the
-install skill tells the operator to verify the gating against the wiki being
-wired. At the time of writing, the wiki this install talks to still answers
-media writes straight from DokuWiki core, so that branch is not hypothetical.
+What actually distinguishes media is the reporting channel, not the gating.
+Core's `saveMedia` and `deleteMedia` have no way to return "held for review", so
+the plugin signals it by **throwing**: a queued media write comes back as an
+error reading `submitted for review as change #N`, and that error is the success
+path. Page writes, since the confinement work, return a structured
+`status: "queued"` / `"updated"` instead. An agent told to expect a status here
+reads the confirmation as a failure and retries, stacking duplicate pending
+changes — the failure mode the plugin's own `core.deleteMedia` fix was written
+to close.
 
-The guard test grew the five media tools in the exposed-tool list and a check
-that no guidance file carries the old exemption wording — the same drift guard
-the endpoint change got, applied to the claim that replaced it.
+The container skill, its installed mirror, the `dokuwiki` subagent, the main
+agent's instructions and the install skill now carry both confirmation messages
+verbatim, name `Failed to delete media file` as the genuine failure it is, and
+state plainly that the absence of a `status` field means nothing for media. The
+restraint that predates all of this survives on its own footing: an upload is
+never implied by a page edit, so these tools are only touched on an explicit
+order.
+
+The guard test carries the five media tools in the exposed-tool list, rejects
+every phrasing that exempts media from the queue, and now also rejects the
+opposite error — promising a `status` / `pendingId` for a media write — by
+requiring both thrown confirmations to appear in the skill.
 
 vibecoded with claude-opus-5
 

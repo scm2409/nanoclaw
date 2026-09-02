@@ -165,7 +165,18 @@ const staleMediaClaims = [
   'act on the wiki **immediately**',
   'return no `pendingId`',
   'takes effect on the wiki immediately',
+  // Media is queued, but it does NOT use the structured status shape: core's
+  // saveMedia/deleteMedia have no result channel, so the plugin signals the
+  // queue by throwing. Guidance promising `status`/`pendingId` here teaches the
+  // agent to read the confirmation as a failure and retry, stacking duplicates.
+  'no `status` and no `pendingId`',
+  'was applied live',
+  'applied live rather than queued',
+  'not gating media',
 ];
+
+/** The exact confirmations the plugin throws for a queued media write. */
+const mediaQueueSignals = ['submitted for review as change', 'Failed to delete media file'];
 
 describe('media writes are documented as review-gated', () => {
   it('carries no wording that exempts media from the queue', () => {
@@ -182,9 +193,11 @@ describe('media writes are documented as review-gated', () => {
       const content = read(file);
       expect(content, `${file} missing core_saveMedia`).toContain('core_saveMedia');
       expect(content, `${file} missing core_deleteMedia`).toContain('core_deleteMedia');
-      // The media section must describe the same queued/pendingId outcome the
-      // page writes have, not merely mention the word somewhere nearby.
-      expect(content, `${file} does not document media as queued`).toMatch(/core_saveMedia[\s\S]{0,1200}`queued`/);
+      // The media section must describe the throw-as-success signal, since that
+      // is the only channel a queued media write has.
+      for (const signal of mediaQueueSignals) {
+        expect(content, `${file} does not document the media signal: ${signal}`).toContain(signal);
+      }
     }
   });
 });
