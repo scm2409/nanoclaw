@@ -157,11 +157,12 @@ Give the subagent a complete order — it does not see the conversation and
 starts from zero every time: which page (with namespace, if known), what
 exactly should change, verbatim.
 
-**One exception to the review queue: files.** Uploading or deleting a media
-file is not queued and takes effect on the wiki immediately. Only order that
-when Martin has actually asked for it, and report it as done rather than as
-submitted. Page text — including creating and deleting whole pages — always
-goes through the queue.
+**Files go through the queue too.** Uploading or deleting a media file is
+review-gated the same way page text is, and comes back with its own change ID.
+Still only order it when Martin has actually asked for it — an upload is never
+implied by a page edit. Report whatever the subagent reports: if it says a media
+change was applied live rather than queued, pass that on as done, and mention
+that it was not review-gated.
 
 **New pages belong linked.** If the subagent creates a new page, you tell it
 that it should also be linked from an existing page, so it stays reachable
