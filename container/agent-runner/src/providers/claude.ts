@@ -607,11 +607,19 @@ function transcriptStartMs(transcriptPath: string): number | null {
  * Claude Code auto-compacts context at this window (tokens). Kept here so
  * the generic bootstrap doesn't need to know about Claude-specific env vars.
  *
- * Operator override: set CLAUDE_CODE_AUTO_COMPACT_WINDOW in the host env to
- * raise or lower the threshold without editing source — useful when running
- * with a 1M-context model variant or when emergency-tuning a deployment.
+ * Claude Code has no idea what the configured model's real context window is
+ * — behind an Anthropic-compatible endpoint it only ever sees this number, and
+ * compacts at roughly three quarters of it. The default suits the million-token
+ * models this install routes to (Gemini Flash) while still leaving a wide
+ * margin, because every token below the threshold is paid for on every turn.
+ * Lower it for a 200k-context model.
+ *
+ * Operator override: set CLAUDE_CODE_AUTO_COMPACT_WINDOW in the host process
+ * env or in `.env` — the host's Claude provider container config forwards it
+ * (see src/providers/claude.ts). Nothing else in the spawn path carries host
+ * environment into the container, so that forwarding is the only route in.
  */
-const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '165000';
+const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '500000';
 
 /**
  * Stale-session detection. Matches Claude Code's error text when a

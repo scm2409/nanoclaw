@@ -11,6 +11,48 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — Compaction stopped happening at an eighth of the context window
+
+Sessions were compacting at roughly 125k tokens on a model with a 1,048,576-token
+context. The cause was `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, hardcoded to `165000`
+in the container's Claude provider: Claude Code never learns the real context
+size of whatever sits behind an Anthropic-compatible endpoint, it only sees that
+number, and compacts at about three quarters of it. The default is now `500000`
+— long sessions on the Gemini Flash models this install routes to, with margin
+left over, since every token under the threshold is re-paid on every turn.
+
+The documented escape hatch did not work either. The constant's comment offered
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` as a host-env override, but the spawn path
+passes only `TZ` and the provider's own contribution into the container — no
+host environment, and `container_configs` has no env column. The host-side
+Claude provider container config now forwards the variable from the host process
+env or `.env` (process env wins), validating it as a positive integer and
+warning instead of passing garbage to the SDK. That logic is a pure exported
+function, `resolveClaudeContainerEnv`, covered by `src/providers/claude.env.test.ts`.
+
+vibecoded with claude-opus-5
+
+---
+
+## 2026-09-02 — Gemini 3.7 Flash → Gemini 3.8 Flash
+
+Google shipped Gemini 3.8 Flash on OpenRouter (`google/gemini-3.8-flash`, same
+1,048,576-token context and 65,536-token output ceiling as 3.7, better coding
+and reasoning scores). Every place this fork pinned `google/gemini-3.7-flash`
+now names 3.8: the `browser`, `dokuwiki`, `mealie`, `nextcloud` and `websearch`
+file subagents, the model example in the main agent's standing instructions,
+the examples in the `configure-openrouter-claude-code` skill, and the fixture
+model id in the Claude provider's alias-env test. The `coder`
+(`z-ai/glm-5.3-flash`) and `smart` (`openai/gpt-5.6-sol`) subagents are
+untouched, as is the `google/gemini-2.5-flash` default in host-side attachment
+transcription — that one is a separate, deliberately cheap transcription path.
+The live group configuration in `data/v2.db` is an operational change and is
+recorded in `CONFIG-CHANGELOG.md`.
+
+vibecoded with claude-opus-5
+
+---
+
 ## 2026-09-02 — Search queries get a language, and the agent gets a locale
 
 Nothing in the main agent's instructions or in the `websearch` subagent said
