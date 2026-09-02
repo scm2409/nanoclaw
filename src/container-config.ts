@@ -54,6 +54,8 @@ export interface ContainerConfig {
   showTokenUsage?: boolean;
   /** Days before a chat transcript is rotated. Undefined = runner default. */
   transcriptRotateDays?: number;
+  /** Record every LLM request/response to the session's llm-trace/ dir. */
+  llmTrace?: boolean;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -77,6 +79,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     logSubagents: row.log_subagents === 1 ? true : undefined,
     showTokenUsage: row.show_token_usage === 1 ? true : undefined,
     transcriptRotateDays: row.transcript_rotate_days ?? undefined,
+    llmTrace: row.llm_trace === 1 ? true : undefined,
   };
 }
 

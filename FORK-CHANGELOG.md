@@ -11,6 +11,57 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-02 — LLM wire trace
+
+A day's spend on one Matrix conversation was six times what the session
+transcripts could account for, and the transcripts had no way to settle the
+question: they record the conversation, not the request. Everything that
+decides the bill lives outside them — the composed system prompt and the tool
+schemas that ride along on every call, where the `cache_control` breakpoints
+landed, and the provider fields the Anthropic-compatible shim discards on the
+way back. On OpenRouter the discarded set includes `usage.cost`, the actual
+charge for the call, and `output_tokens_details.thinking_tokens`, reasoning
+billed at the output rate. Cost analysis against the transcripts is arithmetic
+on guesses.
+
+So: an opt-in recording proxy inside the container, between the Claude Code CLI
+and the endpoint. The runner starts it, points `ANTHROPIC_BASE_URL` at it, and
+adds the loopback hosts to `NO_PROXY` — the container runs with `HTTP(S)_PROXY`
+set to the OneCLI gateway and `NODE_USE_ENV_PROXY=1`, so without that the CLI's
+hop to `127.0.0.1` gets dialled from the host by the gateway and resets. Each
+exchange is appended to `llm-trace/<date>.jsonl` in the session directory:
+request and response verbatim, `model`/`usage`/`stop_reason` lifted out of both
+the streamed and non-streamed shapes, credential headers redacted, bodies
+capped at 4 MiB with a `truncated` flag. The client always gets the full,
+unbuffered body — the trace reads a tee, so a slow drain can't stall a turn.
+
+No credential is involved: the CLI still sends its placeholder and the OneCLI
+gateway still swaps in the real token on the outbound leg. A record does hold
+the whole conversation in plain text, which is why this is a per-group opt-in
+(`ncl groups config update --id <group> --llm-trace true`, new `llm_trace`
+column, off by default) rather than something that is simply on. Files older
+than seven days are pruned when a traced container starts, matching the
+container-log policy.
+
+One trap, found by switching it on rather than by reading: **Bun silently drops
+writes to the proxy env vars.** Setting `process.env.NO_PROXY` and reading it
+back in the next statement yields `undefined`, while an ordinary variable set
+identically survives — Bun owns those names for its own fetch configuration.
+The first live run therefore looked almost right: `ANTHROPIC_BASE_URL` reached
+the CLI, `NO_PROXY` did not, and every call to `127.0.0.1` was dialled from the
+host by the gateway and reset into a retry storm with an empty trace directory.
+The overrides are now returned from `traceEnvOverrides` and merged into the env
+handed to the provider, never routed through `process.env`, with a regression
+test that asserts Bun's behaviour so the indirection isn't "simplified" away.
+
+Verified live end to end: a real agent turn through the CLI channel answered
+normally and left a complete record — 28 tool schemas at 57 KB against a 5 KB
+system prompt, both `cache_control` breakpoints, `usage.cost`, and
+`thinking_tokens`. That first record already contradicted two guesses made from
+the transcripts alone, which is the point of having it.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Compaction stopped happening at an eighth of the context window
 
 Sessions were compacting at roughly 125k tokens on a model with a 1,048,576-token

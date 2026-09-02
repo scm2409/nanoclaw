@@ -22,6 +22,8 @@ export interface RunnerConfig {
   showTokenUsage?: boolean;
   /** Days before a chat transcript rotates. Undefined = provider default. */
   transcriptRotateDays?: number;
+  /** Record every LLM request/response to /workspace/llm-trace. Off by default. */
+  llmTrace?: boolean;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -54,6 +56,7 @@ export function loadConfig(): RunnerConfig {
     logSubagents: raw.logSubagents === true,
     showTokenUsage: raw.showTokenUsage === true,
     transcriptRotateDays: typeof raw.transcriptRotateDays === 'number' ? raw.transcriptRotateDays : undefined,
+    llmTrace: raw.llmTrace === true,
   };
 
   return _config;

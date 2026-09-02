@@ -32,6 +32,7 @@ const TEST_DIR = '/tmp/nanoclaw-test-cli-groups';
 import { initTestDb, closeDb, runMigrations, createAgentGroup, getDb } from '../../db/index.js';
 import { createSession } from '../../db/sessions.js';
 import { dispatch } from '../dispatch.js';
+import { configFromDb } from '../../container-config.js';
 import { ensureContainerConfig, getContainerConfig } from '../../db/container-configs.js';
 // Side-effect import: registers the `groups-*` commands (including delete).
 import './groups.js';
@@ -524,5 +525,55 @@ describe('groups config transcript-rotate-days', () => {
       expect(res.ok).toBe(false);
     }
     expect(getContainerConfig(GID)!.transcript_rotate_days).toBeNull();
+  });
+});
+
+describe('groups config update --llm-trace', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  it('is off (NULL) for a freshly created config row', () => {
+    const GID = 'ag-llm-trace-default';
+    createAgentGroup({ id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() });
+    ensureContainerConfig(GID);
+    expect(getContainerConfig(GID)!.llm_trace).toBeNull();
+  });
+
+  it('flips to on and back to off via the CLI, and rejects a non-boolean value', async () => {
+    const GID = 'ag-llm-trace';
+    const group = { id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() };
+    createAgentGroup(group);
+    ensureContainerConfig(GID);
+
+    const on = await dispatch(
+      { id: 'r1', command: 'groups-config-update', args: { id: GID, 'llm-trace': 'true' } },
+      { caller: 'host' },
+    );
+    expect(on.ok).toBe(true);
+    expect(getContainerConfig(GID)!.llm_trace).toBe(1);
+    // And it has to survive the trip into container.json, or the runner in the
+    // container never learns the group opted in.
+    expect(configFromDb(getContainerConfig(GID)!, group).llmTrace).toBe(true);
+
+    const off = await dispatch(
+      { id: 'r2', command: 'groups-config-update', args: { id: GID, 'llm-trace': 'false' } },
+      { caller: 'host' },
+    );
+    expect(off.ok).toBe(true);
+    expect(getContainerConfig(GID)!.llm_trace).toBe(0);
+    expect(configFromDb(getContainerConfig(GID)!, group).llmTrace).toBeUndefined();
+
+    const bad = await dispatch(
+      { id: 'r3', command: 'groups-config-update', args: { id: GID, 'llm-trace': 'maybe' } },
+      { caller: 'host' },
+    );
+    expect(bad.ok).toBe(false);
   });
 });

@@ -287,6 +287,7 @@ Check these first when something goes wrong:
 | Setup logs | `logs/setup.log` (overall), `logs/setup-steps/*.log` (per-step: bootstrap, environment, container, onecli, mounts, service, etc.) |
 | Session DBs | `data/v2-sessions/<agent-group>/<session>/` — `inbound.db` (`messages_in`: did the message reach the container?), `outbound.db` (`messages_out`: did the agent produce a response?) |
 | Container logs | `logs/containers/<session>/<timestamp>-<container>.log` — the container's full stderr, one file per run. The host log's `Container exited non-zero` line carries the exact `logPath` |
+| What went to the model | Off unless enabled: `ncl groups config update --id <group> --llm-trace true`, then `data/v2-sessions/<agent-group>/<session>/llm-trace/<date>.jsonl` — full request/response per API call, including the composed system prompt, the tool schemas, and provider fields the SDK drops (`usage.cost`, `thinking_tokens`). See [docs/llm-trace.md](docs/llm-trace.md) |
 
 Containers still run with `--rm`, so the runtime's own logs vanish on exit; `logs/containers/` is the host-side copy of everything the container printed to stderr. Files are capped (`CONTAINER_LOG_MAX_BYTES`, default 8 MiB) and pruned per session (`CONTAINER_LOG_KEEP_PER_SESSION`, default 24; `CONTAINER_LOG_MAX_AGE_DAYS`, default 7). Set `CONTAINER_LOGS=off` to disable.
 
@@ -322,6 +323,7 @@ This project uses pnpm with `minimumReleaseAge: 10080` (7 days) in `pnpm-workspa
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
 | [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
 | [docs/build-and-runtime.md](docs/build-and-runtime.md) | Runtime split (Node host + Bun container), lockfiles, image build surface, CI, key invariants |
+| [docs/llm-trace.md](docs/llm-trace.md) | Per-group wire trace: what the model was actually sent and charged, and how to turn it on |
 | [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md) | v1→v2 architecture diff — vocabulary for where v1 things moved |
 | [docs/migration-dev.md](docs/migration-dev.md) | Migration development guide — testing, debugging, dev loop |
 | [docs/provider-migration.md](docs/provider-migration.md) | Switching a live agent group between providers (e.g. Claude → Codex) — what carries over, rollback |

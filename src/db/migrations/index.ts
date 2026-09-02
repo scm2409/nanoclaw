@@ -22,6 +22,7 @@ import { migration020 } from './020-log-subagents.js';
 import { migration021 } from './021-show-token-usage.js';
 import { migration022 } from './022-task-run-health.js';
 import { migration023 } from './023-transcript-rotate-days.js';
+import { migration024 } from './024-llm-trace.js';
 
 export interface Migration {
   version: number;
@@ -60,6 +61,7 @@ export const migrations: Migration[] = [
   migration021,
   migration022,
   migration023,
+  migration024,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a

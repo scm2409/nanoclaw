@@ -13,6 +13,7 @@ const SCALAR_COLUMNS = new Set([
   'log_subagents',
   'show_token_usage',
   'transcript_rotate_days',
+  'llm_trace',
 ]);
 const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
 
@@ -33,11 +34,11 @@ export function createContainerConfig(config: ContainerConfigRow): void {
       `INSERT INTO container_configs (
         agent_group_id, provider, model, effort, image_tag, assistant_name,
         max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm,
-        additional_mounts, log_subagents, show_token_usage, transcript_rotate_days, updated_at
+        additional_mounts, log_subagents, show_token_usage, transcript_rotate_days, llm_trace, updated_at
       ) VALUES (
         @agent_group_id, @provider, @model, @effort, @image_tag, @assistant_name,
         @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm,
-        @additional_mounts, @log_subagents, @show_token_usage, @transcript_rotate_days, @updated_at
+        @additional_mounts, @log_subagents, @show_token_usage, @transcript_rotate_days, @llm_trace, @updated_at
       )`,
     )
     .run(config);
@@ -91,6 +92,7 @@ export function updateContainerConfigScalars(
       | 'log_subagents'
       | 'show_token_usage'
       | 'transcript_rotate_days'
+      | 'llm_trace'
     >
   >,
 ): void {

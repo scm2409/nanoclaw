@@ -36,6 +36,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     log_subagents: row.log_subagents === 1,
     show_token_usage: row.show_token_usage === 1,
     transcript_rotate_days: row.transcript_rotate_days,
+    llm_trace: row.llm_trace === 1,
     updated_at: row.updated_at,
   };
 }
@@ -268,7 +269,7 @@ registerResource({
       access: 'approval',
       description:
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
-        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days.',
+        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -288,6 +289,7 @@ registerResource({
             | 'log_subagents'
             | 'show_token_usage'
             | 'transcript_rotate_days'
+            | 'llm_trace'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -319,6 +321,19 @@ registerResource({
           updates.show_token_usage = raw === 'true' ? 1 : 0;
         }
 
+        // Wire trace. Records every LLM request and response — including the
+        // composed system prompt and the tool schemas — under the session's
+        // `llm-trace/` directory. That is the only view of what the group
+        // actually pays for per call, and equally the full conversation in
+        // plain text, so it stays an explicit per-group opt-in.
+        if (args['llm-trace'] !== undefined || args.llm_trace !== undefined) {
+          const raw = String(args['llm-trace'] ?? args.llm_trace);
+          if (!['true', 'false'].includes(raw)) {
+            throw new Error('--llm-trace must be one of: true, false');
+          }
+          updates.llm_trace = raw === 'true' ? 1 : 0;
+        }
+
         // A chat transcript is re-sent on every turn, so its age is a direct
         // cost lever: the same trivial reply measured ~26.5k prompt tokens in a
         // fresh session and ~72k in a warm one. `none` clears back to the
@@ -341,7 +356,7 @@ registerResource({
 
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace',
           );
         }
 

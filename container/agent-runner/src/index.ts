@@ -35,6 +35,7 @@ import { MEMORY_SESSION_HOOK } from './memory/session-hook.js';
 import './providers/index.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
 import { probeMcpServers } from './mcp-health.js';
+import { startLlmTraceProxy, traceEnvOverrides } from './llm-trace.js';
 import { runPollLoop } from './poll-loop.js';
 
 function log(msg: string): void {
@@ -119,10 +120,32 @@ async function main(): Promise<void> {
     });
   }
 
+  // Wire trace: point the CLI at a local recording proxy instead of the real
+  // endpoint. The overrides are merged into the provider's env below rather
+  // than written to process.env — Bun drops writes to the proxy env vars, so
+  // NO_PROXY would silently never reach the CLI. See traceEnvOverrides.
+  // A failure here is diagnostic-only: the agent runs untraced, not not at all.
+  let traceEnv: Record<string, string> = {};
+  if (config.llmTrace) {
+    try {
+      const upstream = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+      const trace = await startLlmTraceProxy({
+        upstreamBaseUrl: upstream,
+        traceDir: '/workspace/llm-trace',
+        proxyUrl: process.env.HTTPS_PROXY || process.env.https_proxy,
+        onError: (err) => log(`LLM trace write failed: ${err instanceof Error ? err.message : String(err)}`),
+      });
+      traceEnv = traceEnvOverrides(trace.baseUrl, process.env.NO_PROXY);
+      log(`LLM trace ON — recording ${upstream} to ${trace.traceDir} via ${trace.baseUrl}`);
+    } catch (err) {
+      log(`LLM trace failed to start, continuing untraced: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const provider = createProvider(providerName, {
     assistantName: config.assistantName || undefined,
     mcpServers,
-    env: { ...process.env },
+    env: { ...process.env, ...traceEnv },
     additionalDirectories: additionalDirectories.length > 0 ? additionalDirectories : undefined,
     model: config.model,
     effort: config.effort,
