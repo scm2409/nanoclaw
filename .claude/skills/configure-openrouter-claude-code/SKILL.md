@@ -12,7 +12,7 @@ Use this skill when NanoClaw must keep the `claude` provider and Claude Code har
 - Keep NanoClaw's provider set to `claude`.
 - Keep Claude Code / `@anthropic-ai/claude-agent-sdk` as the runtime.
 - Store the OpenRouter key only in OneCLI. Never put it in `.env`, a command argument, a DB row, a container config, or chat text.
-- Use OpenRouter model IDs without an `openrouter/` prefix, for example `google/gemini-3.7-flash`.
+- Use OpenRouter model IDs without an `openrouter/` prefix, for example `google/gemini-3.8-flash`.
 - Set `effort` through NanoClaw's existing `ncl groups config update --effort` option. Supported values are `low`, `medium`, `high`, `xhigh`, and `max`.
 
 ## Configure endpoint
@@ -61,7 +61,7 @@ For file subagents, edit `groups/<folder>/.claude/agents/*.md` and set `model:` 
 Example:
 
 ```text
-normal subagents: google/gemini-3.7-flash, effort inherited from main group
+normal subagents: google/gemini-3.8-flash, effort inherited from main group
 smart subagent: openai/gpt-5.6-sol, effort high when invoking it
 ```
 
@@ -73,6 +73,22 @@ effort: high
 ```
 
 The runner validates named effort levels and passes them to the SDK.
+
+## Set the compaction window
+
+Claude Code cannot see the real context window of an OpenRouter model. It
+auto-compacts against `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and triggers at roughly
+three quarters of that value, so a 1M-context model still compacts early unless
+the window is raised. The default is `500000`.
+
+Override it in the host `.env` (or the host process env, which wins):
+
+```env
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000
+```
+
+Must be a positive integer; anything else is ignored with a warning. Restart
+NanoClaw, then restart the group — the value is read when the container spawns.
 
 ## Verify
 

@@ -1,6 +1,6 @@
 ---
 description: Reads and edits pages in the DokuWiki that runs behind a review-queue plugin — saving is not live but goes into a queue a human must approve. Use for EVERY DokuWiki action, read or write. The calling agent has no DokuWiki tools of its own.
-model: google/gemini-3.7-flash
+model: google/gemini-3.8-flash
 tools: [Read, Write, Skill]
 mcpServers: [dokuwiki]
 skills: [dokuwiki-reviewqueue]
