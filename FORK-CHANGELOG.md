@@ -11,6 +11,44 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — Run the CLI wrapper on the models its own skill picks
+
+`/update-cli-models` existed without ever having been run. Running it changed
+three of the wrapper's four models and both of the things that make caching pay.
+
+The main slot's answer was not a trade-off. `openai/gpt-5.6-luna` is beaten by
+`z-ai/glm-5.3-flash` on every metric that matters here — agentic 58.2 against
+46.9, coding 71.5 against 71.4, intelligence 57.5 against 52.3 — while costing
+2.7x more per input token and 4.8x more per output token. It also caches worse:
+$0.097/M warm against $0.015/M. Straight domination, so it goes.
+
+`x-ai/grok-4.6` replaces `openai/gpt-5.6-sol` in the escalation slot: identical
+intelligence (60.9), 0.6 lower coding, and half the warm rate — $0.504/M
+against $0.967/M — at 40% less per output token, which is what an escalation
+slot spends. `z-ai/glm-5.3` stays for delegated work; its +3.3 coding over the
+flash model is what a subagent handed a complete task actually needs. Four
+distinct models become three.
+
+Every one of them passed the cache gate before adoption, and the resulting
+`provider.only` union was checked against all three for real: a union missing
+one model 404s that slot alone, which would surface mid-session.
+
+`--effort max` becomes `CLAUDE_EFFORT="${CLAUDE_EFFORT:-high}"`. Effort is one
+value per session and cannot follow the slots, so this is a single judgement:
+`high` suits interactive coding without paying reasoning tokens on every
+trivial turn, and `CLAUDE_EFFORT=max ./claude_openrouter.sh` is there when the
+work earns it. How much that saves is unmeasured — the standalone CLI has no
+wire trace, so `thinking_tokens` are invisible to it.
+
+The skill is now **standalone**: it carries its own copies of the probes and
+references rather than reaching into `/update-agent-models`. It lives here by
+circumstance — the wrapper is a personal tool, not a NanoClaw component — and a
+skill that reaches into a sibling cannot be moved out. That duplication is
+deliberate and said so in the skill; the alternative breaks on the day it is
+copied elsewhere.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — `/update-cli-models`, the same treatment for the interactive CLI
 
 `claude_openrouter.sh` runs one's own Claude Code sessions on OpenRouter models

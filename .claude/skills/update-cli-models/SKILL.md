@@ -33,7 +33,7 @@ gate:
 The one family that does **not** work is Gemini through OpenRouter: it returns
 `cache_read == cache_creation` and bills above its own uncached list price. Do
 not put a Gemini model in any slot here. The reasoning and the numbers are in
-`../update-agent-models/references/why-caching-gates-this.md`.
+`references/why-caching-gates-this.md`.
 
 Caching matters more here than for a chat agent, not less: a coding session's
 prompt carries file contents and tool results, and all of it is re-sent every
@@ -65,8 +65,8 @@ earns it — decide, do not inherit.
 Reuse the sibling skill's fetcher; there is no second copy to keep in sync.
 
 ```bash
-bash .claude/skills/update-agent-models/scripts/fetch-benchmarks.sh /tmp/cli-review
-python3 .claude/skills/update-agent-models/scripts/select-models.py \
+bash .claude/skills/update-cli-models/scripts/fetch-benchmarks.sh /tmp/cli-review
+python3 .claude/skills/update-cli-models/scripts/select-models.py \
   /tmp/cli-review --baseline <current-model-for-this-slot> --inventory
 ```
 
@@ -92,7 +92,7 @@ Two rules that are not negotiable here:
 Run the selection per slot with that slot's current model as the baseline:
 
 ```bash
-python3 .claude/skills/update-agent-models/scripts/select-models.py \
+python3 .claude/skills/update-cli-models/scripts/select-models.py \
   /tmp/cli-review --baseline <slot's current model> --usecases /tmp/cli-review/usecases.json
 ```
 
@@ -100,7 +100,7 @@ python3 .claude/skills/update-agent-models/scripts/select-models.py \
 
 ```bash
 C=$(docker ps --format '{{.Names}}' | grep -m1 nanoclaw)
-docker cp .claude/skills/update-agent-models/scripts/cache-probe.ts "$C":/tmp/cache-probe.ts
+docker cp .claude/skills/update-cli-models/scripts/cache-probe.ts "$C":/tmp/cache-probe.ts
 docker exec -e NO_PROXY=127.0.0.1,localhost,::1 "$C" \
   bun /tmp/cache-probe.ts <candidate-1> <candidate-2> ...
 ```
@@ -186,8 +186,16 @@ integration test (`docs/skill-guidelines.md`, "When there is genuinely nothing
 to test in-tree"). Its verification is steps 4 and 6, both of which produce
 numbers that are absent or wrong if the workflow was skipped.
 
-The scripts under `../update-agent-models/scripts/` are referenced, never
-copied — a duplicated probe would drift from the original.
+**This skill is deliberately standalone.** It carries its own copy of the
+probes and references that `/update-agent-models` also has, rather than
+reaching across to them. It lives in this repo by circumstance — the wrapper it
+maintains is a personal tool, not a NanoClaw component — and is expected to move
+out. A skill that reaches into a sibling cannot travel. When a probe changes in
+one, port it deliberately; the duplication is the price of being movable, and
+the alternative is a skill that breaks the day it is copied elsewhere.
+
+Its only dependencies are `python3`, `curl`, `docker` (to borrow gateway
+credentials for the probes), and `bun` inside that container.
 
 ## Troubleshooting
 
