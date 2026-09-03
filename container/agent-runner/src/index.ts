@@ -132,6 +132,7 @@ async function main(): Promise<void> {
       const trace = await startLlmTraceProxy({
         upstreamBaseUrl: upstream,
         traceDir: '/workspace/llm-trace',
+        keepDays: config.llmTraceKeepDays,
         proxyUrl: process.env.HTTPS_PROXY || process.env.https_proxy,
         onError: (err) => log(`LLM trace write failed: ${err instanceof Error ? err.message : String(err)}`),
       });

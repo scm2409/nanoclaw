@@ -29,6 +29,7 @@ export interface ContainerConfigRow {
   show_token_usage: number | null; // 0/1/NULL — NULL and 0 both mean off
   transcript_rotate_days: number | null; // NULL = runner default (14)
   llm_trace: number | null; // 0/1/NULL — NULL and 0 both mean off
+  llm_trace_keep_days: number | null; // NULL = runner default (7)
   updated_at: string;
 }
 

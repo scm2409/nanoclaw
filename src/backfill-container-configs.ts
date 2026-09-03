@@ -58,6 +58,7 @@ export function backfillContainerConfigs(): void {
       effort: null,
       transcript_rotate_days: null,
       llm_trace: null,
+      llm_trace_keep_days: null,
       image_tag: legacy.imageTag ?? null,
       assistant_name: legacy.assistantName ?? null,
       max_messages_per_prompt: legacy.maxMessagesPerPrompt ?? null,

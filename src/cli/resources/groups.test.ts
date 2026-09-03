@@ -576,4 +576,38 @@ describe('groups config update --llm-trace', () => {
     );
     expect(bad.ok).toBe(false);
   });
+
+  it('takes a retention in days, clears back to the default, and rejects nonsense', async () => {
+    const GID = 'ag-llm-trace-keep';
+    const group = { id: GID, name: 't', folder: 't', agent_provider: null, created_at: now() };
+    createAgentGroup(group);
+    ensureContainerConfig(GID);
+    expect(getContainerConfig(GID)!.llm_trace_keep_days).toBeNull();
+
+    const set = await dispatch(
+      { id: 'k1', command: 'groups-config-update', args: { id: GID, 'llm-trace-keep-days': '3' } },
+      { caller: 'host' },
+    );
+    expect(set.ok).toBe(true);
+    expect(getContainerConfig(GID)!.llm_trace_keep_days).toBe(3);
+    expect(configFromDb(getContainerConfig(GID)!, group).llmTraceKeepDays).toBe(3);
+
+    const cleared = await dispatch(
+      { id: 'k2', command: 'groups-config-update', args: { id: GID, 'llm-trace-keep-days': 'none' } },
+      { caller: 'host' },
+    );
+    expect(cleared.ok).toBe(true);
+    expect(getContainerConfig(GID)!.llm_trace_keep_days).toBeNull();
+
+    // 0 would mean "prune everything immediately", which is what turning the
+    // trace off is for — reject it rather than silently wiping records.
+    for (const bad of ['0', '-1', 'soon']) {
+      const res = await dispatch(
+        { id: `k-${bad}`, command: 'groups-config-update', args: { id: GID, 'llm-trace-keep-days': bad } },
+        { caller: 'host' },
+      );
+      expect(res.ok).toBe(false);
+    }
+    expect(getContainerConfig(GID)!.llm_trace_keep_days).toBeNull();
+  });
 });

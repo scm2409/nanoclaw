@@ -24,6 +24,8 @@ export interface RunnerConfig {
   transcriptRotateDays?: number;
   /** Record every LLM request/response to /workspace/llm-trace. Off by default. */
   llmTrace?: boolean;
+  /** Days a trace file is kept. Undefined = the trace module's own default. */
+  llmTraceKeepDays?: number;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -57,6 +59,7 @@ export function loadConfig(): RunnerConfig {
     showTokenUsage: raw.showTokenUsage === true,
     transcriptRotateDays: typeof raw.transcriptRotateDays === 'number' ? raw.transcriptRotateDays : undefined,
     llmTrace: raw.llmTrace === true,
+    llmTraceKeepDays: typeof raw.llmTraceKeepDays === 'number' ? raw.llmTraceKeepDays : undefined,
   };
 
   return _config;

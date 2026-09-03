@@ -37,6 +37,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     show_token_usage: row.show_token_usage === 1,
     transcript_rotate_days: row.transcript_rotate_days,
     llm_trace: row.llm_trace === 1,
+    llm_trace_keep_days: row.llm_trace_keep_days,
     updated_at: row.updated_at,
   };
 }
@@ -269,7 +270,7 @@ registerResource({
       access: 'approval',
       description:
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
-        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace.',
+        'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace, --llm-trace-keep-days.',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -290,6 +291,7 @@ registerResource({
             | 'show_token_usage'
             | 'transcript_rotate_days'
             | 'llm_trace'
+            | 'llm_trace_keep_days'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -334,6 +336,25 @@ registerResource({
           updates.llm_trace = raw === 'true' ? 1 : 0;
         }
 
+        // How long a trace file is kept. Records are large — a one-line answer
+        // costs ~140 KB, since every request carries the whole conversation —
+        // and they hold that conversation in plain text, so retention is a
+        // disk and a privacy setting at once. `none` clears back to the runner
+        // default; 0 would mean "delete immediately", which is what
+        // `--llm-trace false` is for.
+        if (args['llm-trace-keep-days'] !== undefined || args.llm_trace_keep_days !== undefined) {
+          const raw = String(args['llm-trace-keep-days'] ?? args.llm_trace_keep_days);
+          if (['none', 'null', 'default', ''].includes(raw)) {
+            updates.llm_trace_keep_days = null;
+          } else {
+            const days = Number(raw);
+            if (!Number.isFinite(days) || !Number.isInteger(days) || days < 1) {
+              throw new Error('--llm-trace-keep-days must be a whole number of days >= 1, or "none" for the default');
+            }
+            updates.llm_trace_keep_days = days;
+          }
+        }
+
         // A chat transcript is re-sent on every turn, so its age is a direct
         // cost lever: the same trivial reply measured ~26.5k prompt tokens in a
         // fresh session and ~72k in a warm one. `none` clears back to the
@@ -356,7 +377,7 @@ registerResource({
 
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --log-subagents, --show-token-usage, --transcript-rotate-days, --llm-trace, --llm-trace-keep-days',
           );
         }
 

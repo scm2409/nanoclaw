@@ -56,6 +56,8 @@ export interface ContainerConfig {
   transcriptRotateDays?: number;
   /** Record every LLM request/response to the session's llm-trace/ dir. */
   llmTrace?: boolean;
+  /** Days a trace file is kept before the runner prunes it. Undefined = runner default. */
+  llmTraceKeepDays?: number;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -80,6 +82,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     showTokenUsage: row.show_token_usage === 1 ? true : undefined,
     transcriptRotateDays: row.transcript_rotate_days ?? undefined,
     llmTrace: row.llm_trace === 1 ? true : undefined,
+    llmTraceKeepDays: row.llm_trace_keep_days ?? undefined,
   };
 }
 

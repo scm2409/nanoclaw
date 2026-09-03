@@ -14,8 +14,18 @@ Records land in the session directory, one file per UTC day:
 data/v2-sessions/<agent-group>/<session>/llm-trace/<YYYY-MM-DD>.jsonl
 ```
 
-Turn it off the same way (`--llm-trace false`). Files older than 7 days are
-deleted when a traced container starts.
+Turn it off the same way (`--llm-trace false`). Files older than the retention
+window are deleted when a traced container starts — 7 days unless the group
+says otherwise:
+
+```bash
+ncl groups config update --id <group-id> --llm-trace-keep-days 3
+ncl groups config update --id <group-id> --llm-trace-keep-days none   # back to 7
+```
+
+Records are large and hold the conversation in plain text (see below), so this
+is a disk setting and a privacy setting at once. `0` is rejected: deleting
+everything immediately is what turning the trace off is for.
 
 ## Why it exists
 

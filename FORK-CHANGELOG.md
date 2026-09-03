@@ -11,6 +11,20 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — Trace retention is a per-group setting
+
+The wire trace pruned at a fixed seven days, which was a reasonable default and
+a bad constant: a record runs ~140 KB because every request carries the whole
+conversation, and it holds that conversation in plain text, so how long to keep
+one is a disk question and a privacy question that differs per install.
+`llm_trace_keep_days` now sits beside `llm_trace` in the container config, with
+`ncl groups config update --llm-trace-keep-days <n>` and `none` to fall back to
+the default. Zero is rejected rather than honoured — pruning everything on the
+next container start is what turning the trace off is for, and a flag that
+silently wipes records on a typo is a trap.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — Pin an agent group to one provider endpoint, and move off Gemini
 
 Two changes, one cause. Direct experiments against OpenRouter — no NanoClaw in
