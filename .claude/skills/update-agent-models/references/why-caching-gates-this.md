@@ -60,10 +60,40 @@ pin, because without a pin a later turn can drift back onto a good endpoint.
 
 Read the probe accordingly: it tells you whether excursions happen and roughly
 what they cost, not which id scheme is better — the run-to-run spread is larger
-than the difference between the arms. What settles it is the live trace after
-the change (`trace-cost.py`). If a group's real turns sit at the expensive tier
-for a whole session, the pin caught a bad endpoint; restarting the container
-draws again.
+than the difference between the arms.
+
+**The stronger lever is bounding which endpoints qualify at all.** A
+`provider` object in the request body does that, and the CLI will carry one:
+anything in `CLAUDE_CODE_EXTRA_BODY` is merged into the body, so no proxy and
+no request rewriting is involved. Measured over five turns of one conversation:
+
+```
+nothing                                     $0.00286
+x-session-id only                           $0.00462   (stuck on a dear endpoint)
+provider.only = cheapest tier only          $0.00222   (bounced within the tier)
+provider.only + x-session-id                $0.00143
+```
+
+Complementary, not alternatives: the pin bounds the price tier, the header
+holds one endpoint inside it.
+
+**The trap.** `provider.only` containing no provider that serves the requested
+model returns 404 — and `allow_fallbacks: true` does *not* rescue it, which is
+the opposite of what the name suggests. Measured:
+
+```
+gpt-5.6-sol, only = glm's tier, allow_fallbacks:true    404
+gpt-5.6-sol, only = union(glm tier + openai)            served
+glm,         only = union(glm tier + openai)            served
+```
+
+One container's env applies to every model it runs, subagents included, so the
+pin must be the union across all of them — the gateway intersects the list with
+each model's own providers. NanoClaw builds that union daily
+(`src/provider-pins.ts`) and omits the field entirely when any model is
+uncovered: failing open costs money, failing closed breaks a subagent silently.
+The refresh is daily rather than per container start for the same reason — a
+spawn-time fetch that half-succeeds would emit exactly the broken shape.
 
 ## Do not price this from the transcripts
 

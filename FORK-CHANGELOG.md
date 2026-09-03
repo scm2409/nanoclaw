@@ -11,6 +11,50 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — Bound the gateway's provider choice, not just its stickiness
+
+The `x-session-id` header shipped this morning pins a group to one provider
+endpoint, but only to whichever one it happens to land on first — and a bad pin
+is stickier than no pin. The stronger lever turns out to be telling the gateway
+which endpoints qualify at all, and the CLI will carry it: anything in
+`CLAUDE_CODE_EXTRA_BODY` is merged into the request body, verified against the
+real binary, so nothing here rewrites a request. Measured over five turns of
+one conversation:
+
+```
+nothing                                $0.00286
+x-session-id only                      $0.00462   (stuck on a dear endpoint)
+provider.only = cheapest tier only     $0.00222   (bounced within the tier)
+provider.only + x-session-id           $0.00143
+```
+
+Complementary, not alternatives: the pin bounds the price tier, the header
+holds one endpoint inside it. Live on this install the warm rate went from
+$0.0248/M to $0.0154/M — the tier's actual cache-read price.
+
+**`provider.only` is sharper than it looks.** A list containing no provider
+that serves the requested model is a 404, and `allow_fallbacks: true` does not
+rescue it, which is the opposite of what the name suggests. One container's env
+applies to every model it runs, so a list built for the group's own model would
+have silently killed the `smart` subagent on its different one. The pin is
+therefore the union of every model's cheapest tier — the gateway intersects it
+with each model's own providers — and is omitted entirely when any model is
+uncovered. Failing open costs money; failing closed breaks a subagent quietly.
+
+Refreshed once a day from the existing host sweep, not per container spawn.
+That is a correctness choice before an economy one: a spawn-time fetch that
+half-succeeds emits a partial union, which is precisely the broken shape. A
+daily refresh leaves the previous snapshot standing on failure, and needs no
+new scheduler, no container and no model call — the endpoint listing is public
+HTTP. Pins are keyed by model rather than by group, so groups sharing a model
+share the snapshot, and the cheapest tier drops endpoints the gateway reports
+as deranked or down.
+
+`/update-agent-models` gains `provider-tiers.py` and the union trap in its
+reference, since the skill as shipped this morning knew only about the header.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — `/update-agent-models`, the model review as a repeatable skill
 
 The model swap that ran today was a week's worth of one-off scripts and two

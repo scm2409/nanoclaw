@@ -89,6 +89,12 @@ export interface ProviderOptions {
    * survives between turns — see stickySessionEnv in the Claude provider.
    */
   agentGroupId?: string;
+  /**
+   * Which upstream provider endpoints the gateway may route to, built by the
+   * host as the union of every model this container runs. Undefined means
+   * leave the choice to the gateway.
+   */
+  providerPin?: { only: string[]; allow_fallbacks: boolean };
 }
 
 export interface QueryInput {

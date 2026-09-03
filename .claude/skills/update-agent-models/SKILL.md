@@ -136,17 +136,36 @@ curl -s "https://openrouter.ai/api/v1/models/<candidate>/endpoints" | \
   python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(len(d["endpoints"]), "endpoints")'
 ```
 
-Rate excursions on some turns mean routing landed on a pricier endpoint.
-NanoClaw already pins one endpoint per agent group via an `x-session-id` header
-(`stickySessionEnv` in `container/agent-runner/src/providers/claude.ts`), so
-this is a check on the spread, not a change to make.
+Rate excursions on some turns mean routing landed on a pricier endpoint. Read
+the probe for the size of that spread, not as a verdict on the id scheme: a
+session id sticks to whatever endpoint it first lands on, so run-to-run
+variance exceeds the difference between its arms.
 
-Read it for the size of the spread, not as a verdict on the id scheme: a pin
-sticks to whatever endpoint it first lands on, so run-to-run variance exceeds
-the difference between the arms. An arm flat at a high rate with no hits got
-pinned to an expensive endpoint. Step 7's live trace is what settles it — and
-if a group's real turns sit at the expensive tier for a whole session, restart
-the container to draw again.
+NanoClaw bounds this from two sides, and both are already wired:
+
+- `stickySessionEnv` sends an `x-session-id` header, holding **one endpoint**.
+- `providerPinEnv` sends `provider.only` via `CLAUDE_CODE_EXTRA_BODY`, bounding
+  **which endpoints qualify** — the cheapest price tier, refreshed daily by the
+  host sweep (`src/provider-pins.ts`).
+
+They are complementary, not alternatives. Measured over five turns: neither
+$0.00286, header alone $0.00462, pin alone $0.00222, both $0.00143. The pin
+alone still bounces between equally-priced providers and splits the cache; the
+header alone can stick to a dear endpoint.
+
+Inspect what the pin will be for a group's models:
+
+```bash
+python3 .claude/skills/update-agent-models/scripts/provider-tiers.py <model> [more models...]
+```
+
+**Pass every model the group runs, main agent and subagents.** One container's
+env applies to all of them, and `provider.only` containing no provider that
+serves a requested model is a 404 — `allow_fallbacks: true` does not rescue
+that (measured). That is why the pin is a union and why it is omitted entirely
+when any model is uncovered. If you add a subagent on a new model, the pin
+stays absent until the next daily refresh covers it: correct, and cheaper than
+the alternative.
 
 ## 6. Apply
 

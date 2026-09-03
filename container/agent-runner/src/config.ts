@@ -26,9 +26,27 @@ export interface RunnerConfig {
   llmTrace?: boolean;
   /** Days a trace file is kept. Undefined = the trace module's own default. */
   llmTraceKeepDays?: number;
+  /**
+   * Which upstream provider endpoints the gateway may route to. Built by the
+   * host as the union of every model this container runs; absent means leave
+   * the choice to the gateway.
+   */
+  providerPin?: { only: string[]; allow_fallbacks: boolean };
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
+
+/** A pin is only usable if it names at least one provider — see providerPinEnv. */
+function isProviderPin(value: unknown): value is { only: string[]; allow_fallbacks: boolean } {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as { only?: unknown; allow_fallbacks?: unknown };
+  return (
+    Array.isArray(v.only) &&
+    v.only.length > 0 &&
+    v.only.every((s) => typeof s === 'string' && s.length > 0) &&
+    typeof v.allow_fallbacks === 'boolean'
+  );
+}
 
 let _config: RunnerConfig | null = null;
 
@@ -60,6 +78,7 @@ export function loadConfig(): RunnerConfig {
     transcriptRotateDays: typeof raw.transcriptRotateDays === 'number' ? raw.transcriptRotateDays : undefined,
     llmTrace: raw.llmTrace === true,
     llmTraceKeepDays: typeof raw.llmTraceKeepDays === 'number' ? raw.llmTraceKeepDays : undefined,
+    providerPin: isProviderPin(raw.providerPin) ? raw.providerPin : undefined,
   };
 
   return _config;

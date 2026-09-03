@@ -14,6 +14,9 @@ import path from 'path';
 import { GROUPS_DIR } from './config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { log } from './log.js';
+import { modelsForGroup } from './provider-pin-models.js';
+import { buildProviderPin, getProviderPins, type ProviderPin } from './provider-pins.js';
 import type { AgentGroup, ContainerConfigRow } from './types.js';
 
 export interface McpServerConfig {
@@ -58,6 +61,12 @@ export interface ContainerConfig {
   llmTrace?: boolean;
   /** Days a trace file is kept before the runner prunes it. Undefined = runner default. */
   llmTraceKeepDays?: number;
+  /**
+   * Which upstream provider endpoints the gateway may route to, as the union
+   * of this group's models' cheapest tiers. Undefined means send no `provider`
+   * field — see src/provider-pins.ts for why a partial union is unsafe.
+   */
+  providerPin?: ProviderPin;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -99,6 +108,18 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   if (!row) throw new Error(`Container config not found for agent group: ${agentGroupId}`);
 
   const config = configFromDb(row, group);
+
+  // Bound which upstream endpoints the gateway may route to, from the daily
+  // snapshot the host sweep maintains. Read-only here — no network on the
+  // spawn path — and omitted entirely unless every model this group runs has a
+  // fresh entry, because a `provider.only` union missing a model 404s the
+  // subagent that uses it. See src/provider-pins.ts.
+  try {
+    const models = modelsForGroup(agentGroupId);
+    config.providerPin = buildProviderPin(models, getProviderPins(models)) ?? undefined;
+  } catch (err) {
+    log.debug('No provider pin materialized', { agentGroupId, err });
+  }
 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);

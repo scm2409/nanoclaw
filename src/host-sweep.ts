@@ -164,7 +164,40 @@ async function sweep(): Promise<void> {
   }
   // MODULE-HOOK:approvals-reason-sweep:end
 
+  await refreshProviderPinsIfDue();
+
   setTimeout(sweep, SWEEP_INTERVAL_MS);
+}
+
+/**
+ * Epoch-ms of the last provider-pin refresh, or 0 for "never this process".
+ * Deliberately in-memory: a restart re-checking once is harmless, and the
+ * stored `refreshed_at` is what actually decides whether a pin is usable.
+ */
+let lastProviderPinRefresh = 0;
+
+/**
+ * Refresh the cheapest-tier provider list per model, once a day.
+ *
+ * Daily rather than at container spawn on purpose. A spawn-time fetch that
+ * half-fails would emit a partial `provider.only` union, and a union missing a
+ * model is a 404 for whichever subagent runs it — the one failure shape worth
+ * engineering against. Here a failure leaves the previous snapshot in place.
+ * Pure HTTP against a public endpoint: no container, no model call.
+ */
+async function refreshProviderPinsIfDue(): Promise<void> {
+  const { PROVIDER_PIN_REFRESH_INTERVAL_MS, refreshProviderPins } = await import('./provider-pins.js');
+  if (Date.now() - lastProviderPinRefresh < PROVIDER_PIN_REFRESH_INTERVAL_MS) return;
+  lastProviderPinRefresh = Date.now();
+  try {
+    const { allModelsInUse } = await import('./provider-pin-models.js');
+    const models = allModelsInUse();
+    if (models.length === 0) return;
+    const updated = await refreshProviderPins(models);
+    log.info('Provider pins refreshed', { models: models.length, updated });
+  } catch (err) {
+    log.warn('Provider pin refresh failed', { err });
+  }
 }
 
 /** A per-task session with no live tasks and no running container is spent → close it. */
