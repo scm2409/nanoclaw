@@ -1,6 +1,7 @@
 ---
 description: Reads and writes Mealie (recipes, meal plan, cookbooks) in restricted mode. Use for EVERY Mealie action, read or write. The calling agent has no Mealie tools of its own.
-model: google/gemini-3.8-flash
+model: z-ai/glm-5.3-flash
+effort: low
 tools: [Read, Write, Skill]
 mcpServers: [mealie]
 skills: [mealie-restricted]

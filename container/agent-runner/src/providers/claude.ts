@@ -99,6 +99,49 @@ export function classifyRateLimitEvent(
 // Workflow and the four Task list tools were measured, not guessed: across
 // 7,513 recorded tool calls in this install's whole history, they were used
 // zero times. See docs/llm-trace.md for how to re-measure.
+/** OpenRouter documents a 256-character ceiling on the session id. */
+const SESSION_ID_MAX = 256;
+
+/**
+ * Pin this agent group's traffic to one provider endpoint, so a warm prompt
+ * cache is still there on the next turn.
+ *
+ * A gateway that fronts many providers for one model — OpenRouter serves
+ * `glm-5.3-flash` from 23 endpoints across two price tiers — keeps each prompt
+ * cache on the endpoint that wrote it. A request routed elsewhere pays full
+ * price. OpenRouter's default conversation detection hashes the first system
+ * message, which never matches here: our system prompt carries a per-turn
+ * runtime addendum. Its documented fix is an `x-session-id` header, and the
+ * CLI forwards anything in `ANTHROPIC_CUSTOM_HEADERS`.
+ *
+ * Measured over 8 alternating calls on two distinct prefixes: 6/8 cache hits
+ * and $0.00316 without the header (including an excursion onto a 2x-priced
+ * endpoint), 7/8 and $0.00194 with it.
+ *
+ * **One id per agent group, deliberately not per session or per subagent.**
+ * The id decides routing; the prompt prefix is what keys the cache. Distinct
+ * prefixes therefore coexist on one endpoint — cold-start cost measured
+ * identical whether two agents shared an id or held their own — and pinning a
+ * whole group to one endpoint means its sessions share a single warm
+ * tools+system prefix instead of each warming its own.
+ *
+ * Only applied when a custom endpoint is configured. A stock install talking
+ * to api.anthropic.com has no router to pin and gets nothing.
+ */
+export function stickySessionEnv(
+  agentGroupId: string | undefined,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  if (!agentGroupId || !env.ANTHROPIC_BASE_URL) return {};
+  const existing = env.ANTHROPIC_CUSTOM_HEADERS ?? '';
+  // An operator who set the header themselves has made a routing decision; do
+  // not quietly overrule it.
+  if (/^\s*x-session-id\s*:/im.test(existing)) return {};
+  const value = `nanoclaw-${agentGroupId}`.slice(0, SESSION_ID_MAX);
+  const header = `x-session-id: ${value}`;
+  return { ANTHROPIC_CUSTOM_HEADERS: existing ? `${existing}\n${header}` : header };
+}
+
 export const SDK_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
@@ -677,11 +720,12 @@ export class ClaudeProvider implements AgentProvider {
     this.model = options.model;
     this.effort = options.effort;
     this.transcriptRotateDays = options.transcriptRotateDays;
-    this.env = {
+    const baseEnv = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     };
+    this.env = { ...baseEnv, ...stickySessionEnv(options.agentGroupId, baseEnv) };
   }
 
   registerMemorySessionHook(hook: MemorySessionHookRegistration): void {

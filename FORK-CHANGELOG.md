@@ -11,6 +11,63 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — Pin an agent group to one provider endpoint, and move off Gemini
+
+Two changes, one cause. Direct experiments against OpenRouter — no NanoClaw in
+the path — found why prompt caching was costing more than no caching at all.
+
+**The Gemini finding.** OpenRouter's docs say only the *final* `cache_control`
+breakpoint is honoured for Gemini. Claude Code puts its trailing breakpoint on
+the newest message, which is precisely the one that must not be cached, so the
+cached segment always contained the volatile turn, could never be reused, and
+every request paid a full write. Measured on the same prompt: breakpoint on the
+last message $0.867/M, moved to the last stable message $0.075/M, no message
+breakpoint at all $0.646/M. Today's shape was the worst of the three, and worse
+than the $0.75/M list input price. Rewriting the request in our own proxy would
+have "fixed" it, but tampering with another client's cache semantics is not a
+fix, so the model moves instead. Every other family behaves: Anthropic, OpenAI
+and GLM all return real cache reads under the identical request shape.
+
+**The routing finding.** One model is served by many provider endpoints —
+`glm-5.3-flash` by 23, in two price tiers — and a cache lives on the endpoint
+that wrote it. OpenRouter's default conversation detection hashes the first
+system message, which never matches for an agent whose system prompt carries a
+per-turn runtime addendum. Its documented fix is an `x-session-id` header, and
+the CLI forwards `ANTHROPIC_CUSTOM_HEADERS`, so `stickySessionEnv` sets one per
+agent group when a custom endpoint is configured. Over 8 alternating calls: 6/8
+cache hits and $0.00316 without it, including an excursion onto a 2x-priced
+endpoint; 7/8 and $0.00194 with it.
+
+One id per agent group, not per subagent, and that is deliberate — the id
+routes, the prompt prefix is what keys the cache. Two distinct prefixes under
+one id measured exactly the same cold-start cost as under separate ids
+(6/8, $0.00256 either way), and pinning a whole group to one endpoint lets its
+sessions share a single warm tools+system prefix rather than each warming its
+own. An operator who sets `x-session-id` themselves is never overruled, and a
+stock install talking to api.anthropic.com gets nothing.
+
+**The models.** Picked from OpenRouter's own benchmark data rather than a
+hunch, and it takes both surfaces: `/api/v1/models` carries
+`benchmarks.artificial_analysis` plus the `agents` design-arena, while
+`/api/v1/benchmarks` is the only source for tau-bench, GPQA and the search
+suite. Neither is a superset; merged they give 34 metrics. Against the
+`gemini-3.7-flash` baseline at its own price ceiling, `z-ai/glm-5.3-flash` wins
+the metric that matches this install — agentic 58.2 against 45.1 — while also
+edging general intelligence, 57.5 against 56.0, at a tenth of the input price.
+Subagents move with it and finally declare their own reasoning effort: without
+one in frontmatter they inherited the group's `max`, which is waste for a
+process whose whole job is to call a tool and report back.
+
+Two honest gaps. `glm-5.3-flash` scores 73.3 on tau-bench against Gemini's
+80.6, and tool-calling is exactly what the DokuWiki and Nextcloud executors do,
+so those two keep `medium` effort and want a real test against a large wiki
+page and a Deck query. And `websearch` gives up a measured edge: on the search
+benchmarks `deepseek-v4-flash` matched a model twenty-four times its price,
+while GLM is not scored there at all. Fewer models in play was the deliberate
+trade.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-02 — Drop five tool schemas the agent never once called
 
 First finding from the wire trace, and it is embarrassing in the useful way.

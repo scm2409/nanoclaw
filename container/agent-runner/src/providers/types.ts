@@ -83,6 +83,12 @@ export interface ProviderOptions {
    * and ~72k in a warm one. Undefined keeps the provider's own default.
    */
   transcriptRotateDays?: number;
+  /**
+   * The agent group this container serves. Providers may use it to pin
+   * traffic to one endpoint of a multi-provider gateway so a prompt cache
+   * survives between turns — see stickySessionEnv in the Claude provider.
+   */
+  agentGroupId?: string;
 }
 
 export interface QueryInput {

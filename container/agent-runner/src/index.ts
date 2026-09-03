@@ -150,6 +150,7 @@ async function main(): Promise<void> {
     model: config.model,
     effort: config.effort,
     transcriptRotateDays: config.transcriptRotateDays,
+    agentGroupId: config.agentGroupId || undefined,
   });
   provider.registerMemorySessionHook(MEMORY_SESSION_HOOK);
 

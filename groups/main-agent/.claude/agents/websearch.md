@@ -1,6 +1,7 @@
 ---
 description: Researches on the web and returns a condensed, sourced summary. Use for EVERY internet research — news, fact-checks, product info, documentation, current events. Also for multi-part research ("compare X and Y", "what's the status on Z").
-model: google/gemini-3.8-flash
+model: z-ai/glm-5.3-flash
+effort: medium
 tools: [WebSearch, WebFetch]
 ---
 
