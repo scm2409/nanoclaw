@@ -11,6 +11,47 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — `/update-agent-models`, the model review as a repeatable skill
+
+The model swap that ran today was a week's worth of one-off scripts and two
+wrong turns. This is that work as a skill, so the next round is one command
+instead of a rediscovery.
+
+Nine steps: measure the baseline from the wire trace, pull the benchmark data,
+map each agent to the metric that matches its job, shortlist, **prove the
+shortlist caches**, apply, verify, test the risky executors for real, write it
+down. Four scripts carry the parts worth automating — fetching both benchmark
+surfaces, the selection join, and two probes — while the judgement stays in
+prose.
+
+Three things it encodes that are easy to get wrong. **Both benchmark endpoints
+are needed**: `/api/v1/models` has better `artificial_analysis` coverage and
+the `agents` design-arena, `/api/v1/benchmarks` is the only source for
+tau-bench, GPQA and the search suite, and building on one alone silently
+shortens the field. **The metric decides the answer more than the threshold
+does**: an orchestrator is judged on `agentic_index`, an executor on
+`tau_bench_verified_airline`, and those rankings differ sharply. **Caching is
+the gate, not a footnote**: over 99% of an agent turn is prompt, re-sent whole,
+so a model that wins its benchmark and does not cache is not a candidate —
+today's incumbent billed a cache at more than its own uncached list price.
+
+Building it found two flaws in the probe as first written, both from running it
+rather than reading it. It judged on three turns without pinning a provider, so
+a model that caches perfectly read as a failure when one turn landed on a
+second-tier endpoint; it now pins the endpoint as production does, runs five
+turns, and judges on the cached share rather than price alone. And repeated
+sticky-routing runs disagree with each other, because a pin sticks to whichever
+endpoint it first lands on — one run had the shared-id arm stuck on an
+expensive endpoint with no hits at all. The reference file says so plainly: the
+probe measures the spread, the live trace settles the question.
+
+No reach-in into NanoClaw source — two public APIs, probes inside an existing
+container, and configuration changes — so it owes no integration test, which
+`docs/skill-guidelines.md` covers explicitly. Its verification is that steps 5
+and 7 produce numbers that are absent or wrong if the workflow was skipped.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — Trace retention is a per-group setting
 
 The wire trace pruned at a fixed seven days, which was a reasonable default and

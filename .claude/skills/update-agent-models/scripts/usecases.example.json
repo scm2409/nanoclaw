@@ -1,0 +1,42 @@
+[
+  {
+    "agent": "main agent",
+    "metric": "agentic_index",
+    "why": "it orchestrates subagents and chains tool calls; conversation quality is secondary"
+  },
+  {
+    "agent": "main agent (second view)",
+    "metric": "intelligence_index",
+    "why": "general capability, as a floor — a model that wins agentic but loses this reads worse in chat"
+  },
+  {
+    "agent": "MCP tool executors (wiki, calendar, recipes)",
+    "metric": "tau_bench_verified_airline",
+    "why": "multi-turn tool calling against an API under rules — the closest public proxy for an executor's real job"
+  },
+  {
+    "agent": "browser driver",
+    "metric": "agentic_index",
+    "why": "drives a CLI in a loop; no deep reasoning"
+  },
+  {
+    "agent": "coder (index view)",
+    "metric": "coding_index",
+    "why": "writes and runs small programs"
+  },
+  {
+    "agent": "coder (arena view)",
+    "metric": "arena:agents:fullstack",
+    "why": "head-to-head agentic coding; closer to the real job than a static index, and only in the catalogue surface"
+  },
+  {
+    "agent": "escalation / deep reasoning",
+    "metric": "gpqa_diamond",
+    "why": "hard reasoning; this agent is allowed to cost more, so treat the price cap as advisory"
+  },
+  {
+    "agent": "web research",
+    "metric": "search_browsecomp",
+    "why": "multi-hop web research; only a handful of models are scored, so expect a judgement call"
+  }
+]
