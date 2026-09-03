@@ -11,6 +11,42 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — `/update-cli-models`, the same treatment for the interactive CLI
+
+`claude_openrouter.sh` runs one's own Claude Code sessions on OpenRouter models
+instead of Anthropic's, and it had exactly the two gaps the agent containers had
+this morning: no `x-session-id`, no `provider.only`, plus `--effort max` pinned
+on every session. It also fills **five** model slots from one environment, which
+makes the provider-union trap sharper there than anywhere in NanoClaw — a union
+missing one slot's model is a 404 for that slot alone, discovered mid-session.
+
+So: a sibling skill for it. Same nine-step shape as `/update-agent-models`, but
+the selection criteria differ because this is a coding harness rather than a
+chat agent — the main slot is judged on head-to-head agentic coding
+(`arena:agents:fullstack`) rather than conversational ability, the delegated
+slot on `coding_index` since a subagent gets a complete task and no
+conversation, and the highest-frequency slot on price at a floor of capability.
+
+It ships two scripts and **references** the sibling's probes rather than
+copying them: a duplicated cache probe would drift from the original, and the
+guidelines call that out by name. `openrouter-env.py` emits the two exports the
+wrapper needs — the provider union over every slot's model, and a session id
+derived from the working directory so all sessions in one checkout share a warm
+prefix. It refuses to emit a partial union, caches provider tiers for a day
+(93 ms warm start), and never overrides either variable if the operator set it.
+`spend-delta.sh` measures before and after from the gateway's own cumulative
+counter, since the standalone CLI has no wire trace the way the containers do.
+
+The question worth recording: caching *does* work cleanly in Claude Code
+itself. Every model the wrapper currently targets passes the gate —
+`glm-5.3-flash` at $0.015/M warm, `gpt-5.6-luna` at $0.097/M, `glm-5.3` from
+$1.400/M cold to $0.143/M warm. The single family that does not is Gemini
+through OpenRouter, for the reason already documented. Caching matters *more*
+here than for a chat agent: a coding turn's prompt carries file contents and
+tool results, and all of it is re-sent every turn.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — Bound the gateway's provider choice, not just its stickiness
 
 The `x-session-id` header shipped this morning pins a group to one provider
