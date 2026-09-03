@@ -11,6 +11,44 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — The CLI wrapper becomes one standalone Python file that reports its own cost
+
+`claude_openrouter.sh` had grown a dependency on a helper inside a skill folder
+and a cache under `~/.cache/`, which is the opposite of what it is for: it is a
+personal tool that happens to sit in this repo and should survive being copied
+anywhere. It is now `claude_openrouter.py` — one file, standard library only, no
+state on disk, no reference back to the skill or the repository.
+
+The provider tiers are resolved fresh at every launch instead of cached for a
+day. A day-old tier is a day-old price, and the lookups are a few hundred
+milliseconds against a public endpoint, run in parallel. Two refinements came
+out of watching what it picked. Taking only the single cheapest endpoint gave a
+tier of *one* provider for one model — when that stalls, `allow_fallbacks`
+leaves the cheap class entirely — so it now takes a 10% price band, typically
+three or four providers whose price difference is noise next to that risk. And
+the band initially dragged the context window down to 262,144, because a cheaper
+endpoint served a truncated context; a smaller window is a capability
+difference rather than a price one, so endpoints below half the best window on
+offer are dropped and the window is back to 500,000. Endpoints below 95% uptime
+over the last day are skipped alongside the ones the gateway has already
+deranked.
+
+It also answers a question that had no answer before: what a session cost. Two
+figures, both real. The gateway's cumulative counter, read before and after,
+gives what was actually billed. The CLI's own transcript under
+`~/.claude/projects/` gives a per-model token breakdown — the only such
+breakdown available, since the gateway's activity endpoint needs a management
+key and the Anthropic-compatible response drops `usage.cost` before it reaches
+a transcript. A price-table estimate is printed beside the real figure, and the
+wrapper says so when they disagree by more than 30%: that divergence is exactly
+how the Gemini caching problem was found in the first place.
+
+The skill loses two scripts it no longer needs — the wrapper does that work
+itself now — and keeps the part that is actually its job: picking and validating
+models. Its steps 5 and 6 are rewritten accordingly.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — Tell the CLI wrapper how big its context actually is
 
 First real launch after the model switch printed the warning: Claude Code does

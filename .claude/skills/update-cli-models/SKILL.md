@@ -1,11 +1,11 @@
 ---
 name: update-cli-models
-description: Re-pick the models behind claude_openrouter.sh — the wrapper that runs your own interactive Claude Code sessions on non-Anthropic models — prove they cache, and make the caching actually pay off. Use when a CLI session feels expensive or slow, when a new model appears, or on a periodic review. For NanoClaw's agents use /update-agent-models instead.
+description: Re-pick the models behind claude_openrouter.py — the wrapper that runs your own interactive Claude Code sessions on non-Anthropic models — prove they cache, and make the caching actually pay off. Use when a CLI session feels expensive or slow, when a new model appears, or on a periodic review. For NanoClaw's agents use /update-agent-models instead.
 ---
 
 # Update the CLI's models
 
-`claude_openrouter.sh` in the repo root runs **your own** Claude Code sessions
+`claude_openrouter.py` in the repo root runs **your own** Claude Code sessions
 against OpenRouter instead of Anthropic. This skill re-picks the models it
 targets, proves they cache, and adds the two things that decide whether that
 caching is worth anything.
@@ -42,7 +42,7 @@ turn.
 ## 1. Read what the wrapper targets now
 
 ```bash
-grep -E '^export (ANTHROPIC_|CLAUDE_CODE_)' claude_openrouter.sh
+grep -E '^export (ANTHROPIC_|CLAUDE_CODE_)' claude_openrouter.py
 ```
 
 Five slots decide everything, and one env applies to all of them:
@@ -128,66 +128,62 @@ injection on the outbound leg — no key is handled. Reject anything that does
 not read its prefix back at a discount; reject outright the signature
 `read == write == the whole prompt` at or above list input price.
 
-## 5. Wire the two fixes into the wrapper
+## 5. Update the model list
 
-Without these, the caching you just validated mostly does not happen — the
-gateway routes to a different endpoint next turn and the warm cache is
-somewhere else. Add one line before the `exec`:
+The wrapper carries one `MODELS` dict near the top. Edit it; there is nothing
+else to wire, because the wrapper already does at every launch what an operator
+would otherwise have to remember:
 
-```bash
-eval "$(python3 "$(dirname "$0")/.claude/skills/update-cli-models/scripts/openrouter-env.py" \
-  "$ANTHROPIC_MODEL" \
-  "$ANTHROPIC_DEFAULT_SONNET_MODEL" \
-  "$ANTHROPIC_DEFAULT_OPUS_MODEL" \
-  "$ANTHROPIC_DEFAULT_HAIKU_MODEL" \
-  "$ANTHROPIC_DEFAULT_FABLE_MODEL" \
-  "$CLAUDE_CODE_SUBAGENT_MODEL")"
-```
+- resolves each model's cheapest healthy provider band and sends it as
+  `provider.only` — the union over **every** model, since a list omitting one is
+  a 404 for that model and `allow_fallbacks` does not rescue it, and no provider
+  field at all if any model fails to resolve;
+- sets an `x-session-id` keyed to the working directory, pinning one endpoint
+  inside that band;
+- reads the smallest context window the band actually offers and states it, so
+  the CLI stops assuming 200k and compacting far too early.
 
-and pass the two variables through the `exec ... env` list alongside the
-others:
+None of that is cached: a day-old tier is a day-old price, and the lookup costs
+a few hundred milliseconds against a public endpoint.
 
-```bash
-  ANTHROPIC_CUSTOM_HEADERS="${ANTHROPIC_CUSTOM_HEADERS:-}" \
-  CLAUDE_CODE_EXTRA_BODY="${CLAUDE_CODE_EXTRA_BODY:-}" \
-```
-
-What that emits:
-
-- **`CLAUDE_CODE_EXTRA_BODY`** — a `provider.only` union over the cheapest
-  endpoint tier of **every** slot's model. The CLI merges the JSON into the
-  request body, so nothing rewrites a request. **Pass every model id**: a union
-  missing one is a 404 for that model, and `allow_fallbacks: true` does not
-  rescue it. The script emits nothing at all rather than a partial union.
-- **`ANTHROPIC_CUSTOM_HEADERS`** — an `x-session-id` derived from the working
-  directory, so all sessions in one checkout share a warm tools+system prefix.
-  Override the scope with `CLAUDE_OPENROUTER_SESSION_SCOPE` if a different
-  grouping suits you better.
-
-Provider tiers are cached for a day under `~/.cache/claude-openrouter/`, so the
-wrapper starts in milliseconds after the first run. Both variables are left
-untouched if you already set them yourself.
-
-Verify what actually goes out, without spending anything:
+Check what a launch would do without spending anything:
 
 ```bash
-eval "$(python3 .claude/skills/update-cli-models/scripts/openrouter-env.py <your model ids>)"
-echo "$CLAUDE_CODE_EXTRA_BODY"; echo "$ANTHROPIC_CUSTOM_HEADERS"
+NO_SUMMARY=1 ./claude_openrouter.py --print "ok"
 ```
 
-## 6. Measure before and after
+The first two lines name the providers it picked and the window it derived.
 
-There is no wire trace for the standalone CLI, so use the gateway's own
-cumulative counter:
+**Verify the union serves every model** before trusting a new pick — this is the
+failure that only shows up mid-session:
 
 ```bash
-bash .claude/skills/update-cli-models/scripts/spend-delta.sh mark
-./claude_openrouter.sh          # do a representative piece of work, then exit
-bash .claude/skills/update-cli-models/scripts/spend-delta.sh diff
+C=$(docker ps --format '{{.Names}}' | grep -m1 nanoclaw)
+docker exec -e NO_PROXY=127.0.0.1,localhost,::1 "$C" sh -c \
+  'for m in <model-1> <model-2> <model-3>; do
+     curl -sS -o /dev/null -w "$m %{http_code}\n" -X POST "$ANTHROPIC_BASE_URL/v1/messages" \
+       -H "authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01" \
+       -H "content-type: application/json" \
+       -d "{\"model\":\"$m\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"provider\":{\"only\":[<the slugs>],\"allow_fallbacks\":true}}"
+   done'
 ```
 
-Compare like with like: the same task, roughly the same number of turns.
-Nothing else may use the key in between, or the delta absorbs it.
+Anything but `200` means that model is not served by the union.
+
+## 6. Measure
+
+The wrapper prints a per-model token breakdown and two cost figures when the
+session ends: a price-table estimate, and what the gateway actually billed
+(from the delta on its cumulative counter). Run a representative piece of work
+before and after a change and compare like with like.
+
+Watch for the two figures diverging by more than 30% — the wrapper says so. The
+estimate assumes the catalogue's cache rates, so a large gap means caching is
+not behaving the way the price list implies. That divergence is exactly how the
+Gemini problem in `references/why-caching-gates-this.md` was found.
+
+`NO_SUMMARY=1` skips the report; the token breakdown comes from the CLI's own
+transcript under `~/.claude/projects/`, so it needs no gateway access.
 
 ## 7. Write it down
 
@@ -198,11 +194,15 @@ validated, not guessed.
 
 ## Integration points
 
-This skill changes one tracked shell script and reads two public HTTP APIs. It
-makes no reach-in into NanoClaw source and adds no dependency, so it owes no
-integration test (`docs/skill-guidelines.md`, "When there is genuinely nothing
-to test in-tree"). Its verification is steps 4 and 6, both of which produce
-numbers that are absent or wrong if the workflow was skipped.
+This skill edits one dict in a self-contained Python script and reads two public
+HTTP APIs. It makes no reach-in into NanoClaw source and adds no dependency, so
+it owes no integration test (`docs/skill-guidelines.md`, "When there is
+genuinely nothing to test in-tree"). Its verification is steps 4, 5 and 6, each
+of which produces numbers that are absent or wrong if the workflow was skipped.
+
+The wrapper itself is standalone too: one file, Python standard library only, no
+state on disk, and no reference back to this skill or this repository. The skill
+maintains its `MODELS` dict; the wrapper never needs the skill to be present.
 
 **This skill is deliberately standalone.** It carries its own copy of the
 probes and references that `/update-agent-models` also has, rather than
@@ -217,21 +217,15 @@ credentials for the probes), and `bun` inside that container.
 
 ## Troubleshooting
 
-**`openrouter-env.py` prints only the header.** It could not resolve every
-model's tier and refused to emit a partial union. Its stderr names the reason;
-re-run once, since a transient lookup failure looks the same. Check the model
-ids are `vendor/model`, not harness aliases like `sonnet`.
+**The wrapper says it left routing to the gateway.** It could not resolve every
+model's provider tier and refused to send a partial union. Re-run once, since a
+transient lookup failure looks the same. Check the ids in `MODELS` are
+`vendor/model`, not harness aliases like `sonnet`.
 
-**A model 404s with "No allowed providers are available".** A `provider.only`
-reached it that lists nobody serving it — a model id was left out of the
-`openrouter-env.py` arguments. Add it and re-run; the error message lists the
-model's real provider slugs.
+**The wrapper is slow to start.** It resolves provider tiers on every launch,
+one HTTP call per distinct model, in parallel. A slow gateway shows up here.
+That is the deliberate trade for never serving a stale price.
 
-**The wrapper got slow to start.** The tier cache is missing or unwritable;
-check `~/.cache/claude-openrouter/`. It re-fetches four endpoint listings when
-cold.
-
-**Spend looks unchanged after the switch.** Confirm the variables actually
-reach the CLI: `grep -c ANTHROPIC_CUSTOM_HEADERS claude_openrouter.sh` should
-find them in both the `eval` block and the `exec ... env` list. Passing them
-through the `env` list is the step most easily forgotten.
+**Spend looks unchanged after the switch.** Check the wrapper's first two lines:
+if it names no providers, the pin was skipped. If the session summary's two cost
+figures are far apart, caching is not doing what the price list implies.
