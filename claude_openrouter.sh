@@ -31,6 +31,18 @@ export CLAUDE_CODE_SUBAGENT_MODEL="z-ai/glm-5.3"
 # earns it:  CLAUDE_EFFORT=max ./claude_openrouter.sh
 CLAUDE_EFFORT="${CLAUDE_EFFORT:-high}"
 
+# Claude Code never learns the context window of a model behind an
+# Anthropic-compatible endpoint. Without these it assumes 200k, says so on
+# startup, and auto-compacts far too early — every token below the threshold is
+# re-paid on every turn, so compacting early is exactly the wrong direction.
+#
+# 500000 is the smallest window among the endpoints this wrapper can actually
+# reach: the glm models serve 1,048,576 from their pinned providers, but grok
+# serves 500,000, and one value applies to every model in the session. Raise it
+# only if the smallest reachable window rises with it.
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS="${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-500000}"
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-500000}"
+
 # Make the caching actually pay off. This emits two exports:
 #   CLAUDE_CODE_EXTRA_BODY  — a provider.only union over the cheapest endpoint
 #                             tier of EVERY model above. The gateway serves one
@@ -63,4 +75,6 @@ exec onecli run -- env \
   CLAUDE_CODE_SUBAGENT_MODEL="$CLAUDE_CODE_SUBAGENT_MODEL" \
   ANTHROPIC_CUSTOM_HEADERS="${ANTHROPIC_CUSTOM_HEADERS:-}" \
   CLAUDE_CODE_EXTRA_BODY="${CLAUDE_CODE_EXTRA_BODY:-}" \
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CLAUDE_CODE_MAX_CONTEXT_TOKENS" \
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW="$CLAUDE_CODE_AUTO_COMPACT_WINDOW" \
   claude --effort "$CLAUDE_EFFORT" "$@"

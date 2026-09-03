@@ -60,6 +60,24 @@ Note whether `--effort` is pinned in the `exec` line. `max` on every session is
 a real cost lever, and unlike an agent executor a coding session sometimes
 earns it — decide, do not inherit.
 
+**Also check the context window.** Claude Code never learns the window of a
+model behind an Anthropic-compatible endpoint; it assumes 200k, says so on
+startup, and auto-compacts far too early. Compacting early is exactly the wrong
+direction, because every token below the threshold is re-paid on every turn.
+Set both to the **smallest** window among the endpoints the session can reach —
+one value applies to every model:
+
+```bash
+python3 .claude/skills/update-cli-models/scripts/provider-tiers.py --context <model> [more models...]
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=<that minimum>
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW=<that minimum>
+```
+
+The minimum, not the largest: a model whose real window is smaller will simply
+fail once the session passes it. And the window depends on the *pinned*
+providers, not on the model in general — the same model is served with wildly
+different windows by different endpoints.
+
 ## 2. Pull the benchmark data
 
 Reuse the sibling skill's fetcher; there is no second copy to keep in sync.

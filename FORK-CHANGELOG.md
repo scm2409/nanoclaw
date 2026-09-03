@@ -11,6 +11,28 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-03 — Tell the CLI wrapper how big its context actually is
+
+First real launch after the model switch printed the warning: Claude Code does
+not know `z-ai/glm-5.3-flash`, assumes a 200k window, and auto-compacts against
+that. Compacting early is exactly the wrong direction here — every token below
+the threshold is re-paid on every turn — so the wrapper now states the window
+itself, via `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW`.
+
+The value is 500000, and it is the **smallest** window the session can reach,
+not the largest. The glm models serve 1,048,576 from their pinned providers but
+grok serves 500,000, and one env applies to every model in the session; a model
+whose real window is smaller simply fails once the session passes it. The
+window is also a property of the *endpoint*, not the model — the same model is
+served with anything from 262,144 to 1,310,720 depending on provider — so it
+has to be read off the pinned tier, which `provider-tiers.py --context` now
+does and prints the two exports for.
+
+The container side learned this on 2026-09-02 and settled on the same 500000
+default; this is the standalone wrapper catching up.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — Run the CLI wrapper on the models its own skill picks
 
 `/update-cli-models` existed without ever having been run. Running it changed

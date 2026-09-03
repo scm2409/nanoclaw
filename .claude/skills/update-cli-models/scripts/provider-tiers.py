@@ -54,8 +54,46 @@ def cheapest_tier(eps):
     return sorted({s for s, p in priced if p == floor}), floor
 
 
+def context_report(models: list[str]) -> int:
+    """Context windows of the cheapest-tier endpoints, and their minimum.
+
+    Claude Code assumes 200k for a model it does not know, and auto-compacts
+    against that. The correct value is the *smallest* window the session can
+    reach, because one env applies to every model in it — and the window is a
+    property of the endpoint, not the model: the same model is served with
+    wildly different windows by different providers.
+    """
+    smallest = None
+    for model in models:
+        try:
+            eps = endpoints(model)
+        except Exception as err:  # noqa: BLE001
+            print(f"{model:<34} lookup failed: {err}")
+            return 1
+        slugs, _ = cheapest_tier(eps)
+        windows = sorted(
+            {e.get("context_length") for e in eps if (e.get("tag") or "").split("/")[0] in slugs and e.get("context_length")}
+        )
+        if not windows:
+            print(f"{model:<34} no context length reported — cannot advise")
+            return 1
+        print(f"{model:<34} pinned to {slugs} -> windows {windows}")
+        smallest = min(windows) if smallest is None else min(smallest, min(windows))
+    print(f"\nsmallest reachable window: {smallest}")
+    print("export CLAUDE_CODE_MAX_CONTEXT_TOKENS=%d" % smallest)
+    print("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=%d" % smallest)
+    return 0
+
+
 def main() -> int:
-    models = sys.argv[1:]
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--context":
+        rest = argv[1:]
+        if not rest:
+            print(__doc__)
+            return 2
+        return context_report(rest)
+    models = argv
     if not models:
         print(__doc__)
         return 2
