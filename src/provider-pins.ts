@@ -117,7 +117,9 @@ export function getProviderPins(models: string[]): ProviderPinRow[] {
   if (wanted.length === 0) return [];
   const placeholders = wanted.map(() => '?').join(',');
   const rows = getDb()
-    .prepare(`SELECT model, providers, cheapest_price, refreshed_at FROM provider_pins WHERE model IN (${placeholders})`)
+    .prepare(
+      `SELECT model, providers, cheapest_price, refreshed_at FROM provider_pins WHERE model IN (${placeholders})`,
+    )
     .all(...wanted) as Array<{ model: string; providers: string; cheapest_price: number; refreshed_at: string }>;
   return rows.map((r) => ({
     model: r.model,
@@ -162,7 +164,10 @@ async function fetchEndpoints(model: string): Promise<Endpoint[]> {
  * skipped: the previous snapshot stays, and a model with no snapshot simply
  * keeps its group unpinned.
  */
-export async function refreshProviderPins(models: string[], fetcher: EndpointFetcher = fetchEndpoints): Promise<number> {
+export async function refreshProviderPins(
+  models: string[],
+  fetcher: EndpointFetcher = fetchEndpoints,
+): Promise<number> {
   let updated = 0;
   for (const model of [...new Set(models.filter(Boolean))]) {
     try {
