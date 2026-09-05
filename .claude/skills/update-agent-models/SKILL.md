@@ -45,24 +45,41 @@ the group is on `max` then a subagent whose whole job is to call one tool and
 report back is running maximum reasoning on every call. That is usually the
 cheapest thing to fix in this whole workflow.
 
-## 2. Pull both benchmark surfaces
+## 2. Pull the three benchmark surfaces
 
 ```bash
 bash .claude/skills/update-agent-models/scripts/fetch-benchmarks.sh /tmp/model-review
 ```
 
-Two endpoints, and **neither is a superset of the other**:
+Three sources, and **none is a superset of another**:
 
 - `/api/v1/models` — the catalogue, plus `benchmarks.artificial_analysis` for
-  more models than the other surface has, plus the `agents` design-arena, which
-  the other surface omits entirely. Public. Also the authoritative pricing.
+  more models than OpenRouter's own runs cover, plus the `agents` design-arena,
+  which the other surfaces omit entirely. Public. Also the authoritative pricing.
 - `/api/v1/benchmarks` — OpenRouter's own runs, and the **only** source for
   `tau_bench_verified_airline`, `gpqa_diamond` and the search suite. Needs
   auth, so the script fetches it from inside a running agent container where
   the OneCLI gateway supplies the credential.
+- **artificialanalysis.ai's leaderboard** — ~640 rows carrying what neither
+  OpenRouter surface has: **cost per indexed task**, time per task, and one row
+  per reasoning-effort level. Public, parsed out of the page's own data payload;
+  the join key `openrouterApiId` is published by AA itself, so nothing rests on
+  name matching.
 
-Merged, that is ~34 metrics. Building on one alone silently shortens the
+Merged, that is ~38 metrics. Building on one alone silently shortens the
 candidate field.
+
+The third surface is the one that prices what an agent actually does. The
+catalogue prices a token, and a reasoning model's bill is set by how many tokens
+it spends thinking — invisible on a price list. That is also why it settles the
+effort question in step 6 with numbers instead of taste: `openai/gpt-5.6-sol`
+costs $0.367 per indexed task at `medium` and $1.249 at `max`, same id, same
+$/M. Cost-per-task exists for ~50 rows (the current frontier); the quality
+indices cover ~390 models with an OpenRouter id.
+
+AA's figures are namespaced `aa:` in `--inventory` so they never silently
+overwrite the catalogue's flattened numbers — where both exist, a disagreement
+means one of them is a stale index version and is worth reading, not averaging.
 
 ## 3. Map each agent to the metric that matches its job
 
@@ -103,6 +120,45 @@ trade in front of the user (a −1.9 gap for a 25× price cut is a real option; 
 
 Prefer **few models over optimal ones**. Each additional model is another thing
 to re-validate on every future run of this skill.
+
+### Rank on quality against measured cost
+
+The rule above answers "is anything strictly better". This answers "what is the
+best trade", which is the question when nothing is strictly better:
+
+```bash
+python3 .claude/skills/update-agent-models/scripts/select-models.py \
+  /tmp/model-review --score executor --baseline <agent's current model>
+```
+
+    score = quality_norm - weight_cost * log10(cost_per_task)_norm
+
+Cost is normalized in log space because the field spans three orders of
+magnitude; on a linear scale the cheapest model wins every role by arithmetic
+alone. The weights encode how often the role runs and how much its output
+matters:
+
+| Role | Metric | Cost weight | Reasoning |
+|---|---|---|---|
+| `orchestrator` | `agentic_index` | 1.0 | Runs on every turn of every conversation |
+| `executor` | `tau_bench_verified_airline` | 1.5 | The highest-frequency shape in a roster, judged on driving an API correctly |
+| `coder` | `coding_index` | 0.8 | Complete task in, code out; ability carries it |
+| `researcher` | `agentic_index` | 1.0 | Cross-check with `--metric search_browsecomp`, and believe it only if the coverage line is not two |
+| `escalation` | `intelligence_index` | 0.35 | Allowed to be expensive, not allowed to be pointless |
+
+`--metric <name>` scores any metric from the merged table, so an executor can be
+ranked on `tau_bench_verified_airline` and cross-checked on
+`arena:agents:fullstack` without leaving the tool.
+
+**A low cost weight needs `--min-metric` beside it.** In a quality-minus-cost
+ranking a large price gap buys off a small quality deficit, so cheap mid-tier
+models float into the escalation role on price alone. The floor is what makes
+the role mean anything.
+
+Only AA's own indices are scored per reasoning effort; everything else is one
+figure per model, ranked once and priced at its cheapest measured variant. The
+script says which case a table is in, and the difference matters: an effort
+variant is a real choice you make in step 6, a flat score is not.
 
 ## 5. Prove the shortlist caches — the gate
 
@@ -185,7 +241,20 @@ effort: low
 
 Effort per job, not per taste: `low` for executors that call a tool and report;
 `medium` where the agent must chain calls or judge sources; `high` only for a
-deliberate escalation agent. **Set it explicitly on every subagent**, including
+deliberate escalation agent. `aa.json` prices that decision per model — the same
+id at `max` against `medium` is routinely 3x the money and 3x the wall clock,
+for a few index points that an executor never spends:
+
+```bash
+python3 -c "
+import json,sys
+rows=[r for r in json.load(open('/tmp/model-review/aa.json'))['data']
+      if r['openrouter_id']==sys.argv[1] and r['cost_per_task']]
+for r in sorted(rows,key=lambda r:-r['intelligence_index']):
+    print(f\"{r['effort'] or 'default':<14} index {r['intelligence_index']:5.1f}  \"
+          f\"\${r['cost_per_task']:.3f}/task  {r['sec_per_task']:.0f}s\")
+" <model-id>
+``` **Set it explicitly on every subagent**, including
 where it matches the group default — an inherited value is invisible and drifts
 the next time the group changes.
 
@@ -237,8 +306,9 @@ result from a correct answer reached in six calls.
 
 ## Integration points
 
-This skill makes **no reach-in into NanoClaw source**. It reads two public HTTP
-APIs, runs probes inside an existing container, and changes configuration —
+This skill makes **no reach-in into NanoClaw source**. It reads three public
+HTTP surfaces (two OpenRouter APIs and one HTML page), runs probes inside an
+existing container, and changes configuration —
 `ncl` writes for the group, tracked frontmatter for the subagents. There is no
 line in the tree whose deletion a test could catch, so a registration test is
 structurally inapplicable (see `docs/skill-guidelines.md`, "When there is
@@ -246,6 +316,16 @@ genuinely nothing to test in-tree"). Its verification is step 5 and step 7:
 both produce numbers that are wrong or absent if the workflow was not followed.
 
 ## Troubleshooting
+
+**`fetch-artificialanalysis.py` exits with "parsed only N models".** The
+leaderboard's data payload changed shape. That is a parser fix, not a retry: the
+script refuses a partial list on purpose, because a selection built on whichever
+few rows survived a layout change looks exactly like a valid one.
+
+**A provider answers `400` to the union check with a tiny `max_tokens`.** Some
+endpoints reject anything below 16 (Meta does) and say so from inside a request
+they accepted — it reads exactly like a routing failure. Read the body before
+concluding the pin is wrong.
 
 **`fetch-benchmarks.sh` reports no running container.** `/api/v1/benchmarks`
 needs auth. Send the group any message to spawn a container, then re-run. The

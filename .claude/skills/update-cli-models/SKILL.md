@@ -142,6 +142,13 @@ matters:
 | `haiku` | `agentic_index` | 2.0 | Highest-frequency, lowest-stakes slot — cheap beats clever |
 | `fable` | `intelligence_index` | 0.35 | The escalation slot: allowed to be expensive, not allowed to be pointless |
 
+`--metric <name>` scores any metric from the merged table instead of the slot's
+default, so the main slot can be ranked on `arena:agents:fullstack` — the
+head-to-head that step 4 calls for — and still priced on cost-per-task. Only
+AA's own indices are per-effort; anything else is one figure per model, ranked
+once and priced at its cheapest measured variant, and the table says which case
+it is in.
+
 **Always pair a low cost weight with `--min-metric`.** A quality-minus-cost
 ranking with a light cost weight still floats cheap mid-tier models into the top
 of the escalation slot, because a small quality deficit is bought off by a large

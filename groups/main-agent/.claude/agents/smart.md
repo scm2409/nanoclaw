@@ -1,7 +1,7 @@
 ---
 description: Escalation subagent for complex tasks that need more reasoning power than the main chat's default model — multi-layered architecture/design decisions, tricky debugging across several files, ambiguous requirements that need careful weighing. Also owns deep research: it runs the whole multi-source workflow itself, so hand it the question rather than orchestrating searches yourself. IMPORTANT: Only invoke after explicitly asking the user, never automatically — except for an explicit deep-research request, where asking for the research is the approval.
-model: openai/gpt-5.6-sol
-effort: high
+model: meta/muse-spark-1.3
+effort: xhigh
 skills: [deep-research]
 ---
 

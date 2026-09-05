@@ -15,7 +15,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { buildProviderPin, cheapestTierProviders, type ProviderPinRow } from './provider-pins.js';
+import {
+  CACHE_UNRELIABLE_PROVIDERS,
+  buildProviderPin,
+  cheapestTierPrice,
+  cheapestTierProviders,
+  type ProviderPinRow,
+} from './provider-pins.js';
 
 const endpoint = (tag: string, prompt: number, extra: Record<string, unknown> = {}) => ({
   tag,
@@ -108,5 +114,74 @@ describe('buildProviderPin', () => {
   it('always allows fallbacks, so a whole tier going down degrades in price not availability', () => {
     const pin = buildProviderPin(['a/one'], [fresh('a/one', ['x'])]);
     expect(pin?.allow_fallbacks).toBe(true);
+  });
+});
+
+/**
+ * Price is not the only property of an endpoint that costs money. Measured on
+ * 2026-09-05, same model, same prompt, six turns each: z-ai read its prefix
+ * back on five of six turns, novita on three, deepinfra returned a 46% partial
+ * read, and gmicloud on one. A cheapest-tier pin that keeps gmicloud is a pin
+ * that pays full input price on most turns — dearer than the endpoint it
+ * undercut by a tenth of a cent.
+ */
+describe('providers that do not cache', () => {
+  it('names the measured offender so a refresh cannot pick it up again', () => {
+    expect(CACHE_UNRELIABLE_PROVIDERS['z-ai/glm-5.3-flash']).toEqual(expect.arrayContaining(['gmicloud', 'deepinfra']));
+  });
+
+  it('leaves the cheapest tier alone when nothing in it is denied', () => {
+    const eps = [endpoint('z-ai/fp8', 7.5e-8), endpoint('novita/fp8', 7.5e-8)];
+    expect(cheapestTierProviders(eps, ['gmicloud'])).toEqual(['novita', 'z-ai']);
+  });
+
+  it('drops a denied provider from the tier it would otherwise share', () => {
+    const eps = [endpoint('gmicloud/fp8', 7.5e-8), endpoint('z-ai/fp8', 7.5e-8)];
+    expect(cheapestTierProviders(eps, ['gmicloud'])).toEqual(['z-ai']);
+  });
+
+  it('moves up to the next price tier rather than returning nothing', () => {
+    // Denying the whole cheapest tier must not unpin the group: unpinned means
+    // routing bounces across every endpoint, which is the more expensive
+    // failure. A tenth of a cent more per million buys a cache that works.
+    const eps = [endpoint('gmicloud/fp8', 7.5e-8), endpoint('novita/fp8', 1.0e-7), endpoint('wafer', 1.3e-7)];
+    expect(cheapestTierProviders(eps, ['gmicloud'])).toEqual(['novita']);
+  });
+
+  it('filters a stored pin too, so the fix does not wait for the next refresh', () => {
+    const row: ProviderPinRow = {
+      model: 'z-ai/glm-5.3-flash',
+      providers: ['deepinfra', 'gmicloud', 'novita', 'z-ai'],
+      cheapest_price: 7.5e-8,
+      refreshed_at: new Date().toISOString(),
+    };
+    expect(buildProviderPin(['z-ai/glm-5.3-flash'], [row])).toEqual({
+      only: ['novita', 'z-ai'],
+      allow_fallbacks: true,
+    });
+  });
+
+  it('fails open when a stored pin holds nothing but denied providers', () => {
+    const row: ProviderPinRow = {
+      model: 'z-ai/glm-5.3-flash',
+      providers: ['gmicloud'],
+      cheapest_price: 7.5e-8,
+      refreshed_at: new Date().toISOString(),
+    };
+    expect(buildProviderPin(['z-ai/glm-5.3-flash'], [row])).toBeNull();
+  });
+});
+
+describe('cheapestTierPrice', () => {
+  it('reports the price of the tier actually pinned, not of one that was denied', () => {
+    // The stored price is what an operator reads when asking why a group pays
+    // what it pays. Quoting a price from an endpoint the pin refuses to use
+    // would make that column a lie.
+    const eps = [endpoint('gmicloud/fp8', 7.5e-8), endpoint('novita/fp8', 1.0e-7)];
+    expect(cheapestTierPrice(eps, ['gmicloud'])).toBe(1.0e-7);
+  });
+
+  it('returns null when nothing is priced', () => {
+    expect(cheapestTierPrice([endpoint('z-ai/fp8', 0)], [])).toBeNull();
   });
 });

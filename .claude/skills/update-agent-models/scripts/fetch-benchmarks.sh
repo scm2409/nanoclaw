@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Pull both of OpenRouter's benchmark surfaces into a work directory.
+# Pull the three benchmark surfaces this skill uses into a work directory.
 #
-# Neither is a superset of the other, so a selection built on one alone is
-# quietly short of candidates:
+# None is a superset of another, so a selection built on one alone is quietly
+# short of candidates:
 #
 #   /api/v1/models      model catalogue + `benchmarks.artificial_analysis`
 #                       (~179 models) + `benchmarks.design_arena` including the
@@ -12,12 +12,21 @@
 #                       tau_bench_verified_airline, gpqa_diamond and the search
 #                       suite. Requires auth.
 #
+#   artificialanalysis.ai/leaderboards/models
+#                       ~640 rows with cost-per-task, time-per-task and one row
+#                       per reasoning-effort level. The only surface that prices
+#                       a whole task instead of a token, and the only one that
+#                       separates a model's effort levels. Public, no auth;
+#                       parsed out of the page's own data payload.
+#
 # The second is fetched from inside a running agent container so the OneCLI
 # gateway supplies the key on the outbound leg; no credential is handled here.
+# The third needs neither container nor key.
 #
 # Usage: fetch-benchmarks.sh <work-dir> [container-name]
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="${1:?usage: fetch-benchmarks.sh <work-dir> [container-name]}"
 CONTAINER="${2:-$(docker ps --format '{{.Names}}' | grep -m1 nanoclaw || true)}"
 mkdir -p "$WORK"
@@ -32,6 +41,9 @@ print(f"    {n} models (total_count {total})")
 if total and n < total:
     raise SystemExit(f"    paginated: only {n} of {total} fetched — raise the limit")
 PY
+
+echo "==> Artificial Analysis leaderboard -> $WORK/aa.json"
+python3 "$HERE/fetch-artificialanalysis.py" "$WORK/aa.json"
 
 if [ -z "$CONTAINER" ]; then
   echo "!!  no running agent container found — skipping /api/v1/benchmarks."

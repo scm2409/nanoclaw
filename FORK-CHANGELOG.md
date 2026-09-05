@@ -11,6 +11,116 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-05 — The provider pin stops routing to endpoints whose cache does not work
+
+KaiL01's wire trace showed 48% of 5.9M prompt tokens billed at full input price
+across a conversation whose prefix never changed. The prompt was not the cause:
+on the misses the entire message history was byte-identical to the previous
+request, the only difference being the `cache_control` marker moving one message
+forward, and the system prompt held the same hash across 59 of 62 requests.
+Resolving `x-generation-id` against OpenRouter showed a single provider
+throughout, so the sticky session header and the pin were both doing their job.
+
+The cause was which endpoint they were doing it to. Same model, same prompt, six
+turns per provider: z-ai read its prefix back on five of six turns, novita on
+three (cold until it warms), deepinfra returned a 46% partial read every time,
+and gmicloud read once. The pin selects the cheapest price tier, all four sat in
+it at $0.075/M, and the session header held the group on gmicloud — the cheapest
+endpoint by a hundredth of a cent and by far the dearest in practice, because
+over 99% of an agent turn is prompt.
+
+`src/provider-pins.ts` now carries `CACHE_UNRELIABLE_PROVIDERS`, a per-(model,
+provider) denylist with the measurement in the comment above it, and
+`cheapestTierProviders` takes the denied set *before* choosing the tier rather
+than filtering after. That ordering is the point: filtering afterwards could
+empty the tier and leave the group unpinned, and unpinned routing bounces across
+every endpoint — the more expensive failure. Denied out of the cheapest tier,
+the pin simply moves up to the next tier that still has a member.
+`buildProviderPin` filters stored rows on the way out as well, so an added entry
+takes effect at the next container spawn instead of waiting up to a day for the
+refresh. `cheapestTierPrice` is denial-aware for the same reason: the stored
+price is what an operator reads when asking why a group costs what it costs.
+
+Both gmicloud and deepinfra are denied for `z-ai/glm-5.3-flash`. deepinfra's 46%
+is better than nothing but half of what the other two deliver, and the session
+header pins whichever endpoint it lands on first — a coin flip is not a cost
+model.
+
+Verified live rather than in tests alone: the pin for that model went from four
+providers to `["novita","z-ai"]` at an unchanged $0.075/M, and three turns
+through the normal chat path landed on Novita and read the full 24,896-token
+prefix back from cache by the third turn.
+
+vibecoded with claude-opus-5
+
+## 2026-09-05 — KaiL01's escalation and web-search subagents change model
+
+First run of the extended `/update-agent-models` against this install's own
+roster. Seven subagents, six of them on `z-ai/glm-5.3-flash`, `smart` on
+`openai/gpt-5.6-sol`. Baseline from the wire trace: 117 turns, 5.92M prompt
+tokens, 52% of it read from cache, $0.00329 a turn.
+
+`smart` moves to `meta/muse-spark-1.3` at xhigh effort. It ranked seventh where
+it stood: 51.3 on the intelligence index for $1.249 per indexed task, against
+Spark's 51.6 for $0.840 and a third less wall clock. Cache-gated first —
+$1.250/M cold, $0.159/M warm at a 99% prefix hit.
+
+`websearch` moves to `openai/gpt-5.6-luna` at xhigh effort, deliberately as a
+trial rather than a roster-wide switch. On tau-bench it is 2.6 points *below*
+the model it replaces, but 3.2x cheaper per task and 5.7x faster, and
+`glm-5.3-flash` is the slowest model in the measured field by a wide margin
+(940 seconds per indexed task). Whether that trade holds is a question about
+this install's traffic, not about the benchmark, so one agent carries it for a
+while before the other four executors follow. Cache probe passes at $0.097/M
+warm, 100% prefix.
+
+The main agent and `coder` stay where they are: everything ranked above them is
+cheaper without being better.
+
+Provider pins were refreshed by hand after the edit rather than waiting for the
+daily sweep. The pin is a union over every model a group runs and is omitted
+entirely when one model is uncovered, so between the frontmatter change and the
+next refresh the whole group would have run unpinned — measured elsewhere at
+roughly twice the cost per turn.
+
+Post-change numbers are one test conversation, not a comparison: subagent turns
+start cold, so the honest read is "both models answer correctly through the
+normal delivery path" — Spark drove the escalation, Luna searched and
+cross-checked two sources. The cost question needs days of ordinary traffic.
+
+vibecoded with claude-opus-5
+
+## 2026-09-05 — /update-agent-models reads the same third surface, and scoring learns metrics it does not own
+
+The Artificial Analysis leaderboard is worth as much to the agent roster as it
+is to the CLI wrapper, and for one reason the wrapper does not have: a roster
+has an effort setting per subagent, and until now that was set by judgement.
+`aa.json` prices it. `openai/gpt-5.6-sol` on the same id costs $0.225 a task at
+`low` and $1.249 at `max`, 48 seconds against 278, for 10.5 index points that an
+executor calling one tool never spends. The skill's step 6 now shows how to
+print that table for any model instead of arguing about it.
+
+`fetch-artificialanalysis.py` and the three-surface `fetch-benchmarks.sh` are
+copied across verbatim — the two skills keep separate copies on purpose, so that
+either can travel out of this repo, and the copies were byte-identical before
+this. `--score` arrives with roles instead of wrapper slots: `orchestrator`,
+`executor`, `coder`, `researcher`, `escalation`, weighted 1.0 / 1.5 / 0.8 / 1.0 /
+0.35. Anthropic ids are *not* excluded here, unlike in the CLI skill — a
+NanoClaw group may legitimately run one; it is the wrapper that exists to
+replace them.
+
+Scoring also grew past the metrics Artificial Analysis publishes. `--metric`
+ranks on anything in the merged table — `tau_bench_verified_airline` for an
+executor, `arena:agents:fullstack` for a coding orchestrator — while still
+pricing each candidate on measured cost per task. Those metrics carry no
+reasoning-effort dimension, so such a model is ranked once and priced at its
+cheapest measured variant, and the table says which of the two cases it is in
+rather than implying the benchmark was run at that effort. The `researcher`
+role defaults to `agentic_index` for the same honesty: `search_browsecomp` is
+scored for two usable models, which is a coverage line, not a ranking.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-05 — The CLI model skill learns what a task costs, not just what a token costs
 
 `/update-cli-models` picked models from OpenRouter's two benchmark surfaces,

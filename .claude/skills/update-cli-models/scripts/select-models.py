@@ -178,67 +178,95 @@ def merge_aa_scores(scores, aa_index):
             scores["aa:cost_per_task"][mid] = min(costs)
 
 
-def score_slot(aa_index, profile, weight_cost, include_gemini, include_anthropic, top,
+def score_slot(scores, aa_index, quality, weight_cost, include_gemini, include_anthropic, top,
                baseline=None, min_metric=None):
-    """Rank (model, effort variant) pairs for one slot and print the table."""
-    quality = profile["quality"]
-    rows = [
-        (mid, r)
-        for mid, variants in aa_index.items()
-        for r in variants
-        if r.get(quality) is not None
-        and r.get("cost_per_task") is not None
-        and usable(mid)
-        and (include_gemini or not mid.startswith(CACHE_BROKEN_VENDORS))
-        and (include_anthropic or not mid.startswith(REPLACED_VENDORS))
-        and (min_metric is None or r[quality] >= min_metric)
-    ]
+    """Rank candidates for one role by quality against measured cost per task.
+
+    Two kinds of metric arrive here. AA's own indices are scored per
+    reasoning-effort variant, so each variant is ranked separately — the effort
+    level moves both the score and the bill. Every other metric (tau-bench, the
+    arenas, GPQA) is one figure per model with no effort attached, so the model
+    is ranked once, priced at its cheapest measured variant, and the table says
+    so rather than implying the benchmark was run at that effort.
+    """
+    aa_native = quality in AA_METRICS
+    rows = []
+    for mid, variants in aa_index.items():
+        if not usable(mid):
+            continue
+        if not include_gemini and mid.startswith(CACHE_BROKEN_VENDORS):
+            continue
+        if not include_anthropic and mid.startswith(REPLACED_VENDORS):
+            continue
+        costed = [r for r in variants if r.get("cost_per_task") is not None]
+        if not costed:
+            continue
+        if aa_native:
+            pairs = [(r[quality], r) for r in costed if r.get(quality) is not None]
+        else:
+            outside = scores.get(quality, {}).get(mid)
+            pairs = [] if outside is None else [(outside, min(costed, key=lambda r: r["cost_per_task"]))]
+        for value, variant in pairs:
+            if min_metric is None or value >= min_metric:
+                rows.append((mid, value, variant))
+
     if not rows:
-        print("no model has both a score for this metric and a measured cost per task.")
+        print(f"no model has both a score for {quality} and a measured cost per task.")
         print("aa.json missing or stale? run fetch-benchmarks.sh again.")
         return 1
 
-    qs = [r[quality] for _, r in rows]
-    cs = [math.log10(r["cost_per_task"]) for _, r in rows if r["cost_per_task"] > 0]
-    qlo, qhi = min(qs), max(qs)
-    clo, chi = min(cs), max(cs)
+    qs = [v for _, v, _ in rows]
+    cs = [math.log10(r["cost_per_task"]) for _, _, r in rows if r["cost_per_task"] > 0]
+    qlo, qhi, clo, chi = min(qs), max(qs), min(cs), max(cs)
 
     def norm(v, lo, hi):
         return 0.0 if hi == lo else (v - lo) / (hi - lo)
 
-    ranked = []
-    for mid, r in rows:
-        cost = max(r["cost_per_task"], 10 ** clo)
-        q = norm(r[quality], qlo, qhi)
-        c = norm(math.log10(cost), clo, chi)
-        ranked.append((q - weight_cost * c, q, c, mid, r))
-    ranked.sort(key=lambda x: -x[0])
+    ranked = sorted(
+        (
+            (
+                norm(value, qlo, qhi)
+                - weight_cost * norm(math.log10(max(r["cost_per_task"], 10 ** clo)), clo, chi),
+                mid,
+                value,
+                r,
+            )
+            for mid, value, r in rows
+        ),
+        key=lambda x: -x[0],
+    )
 
     floor = f", floor {min_metric}" if min_metric is not None else ""
-    print(f"metric {quality}, cost weight {weight_cost}{floor}")
     skipped = [w for w, on in ((CACHE_BROKEN_VENDORS, include_gemini),
                                (REPLACED_VENDORS, include_anthropic)) if not on]
     excluded = ", ".join(v.rstrip("/") for group in skipped for v in group) or "nothing"
-    print(f"{len(rows)} scored variants across {len({m for m, _ in rows})} models "
+    print(f"metric {quality}, cost weight {weight_cost}{floor}")
+    print(f"{len(rows)} scored candidates across {len({m for m, _, _ in rows})} models "
           f"(excluded: {excluded})\n")
     print(f"  {'score':>6}  {'metric':>6}  {'$/task':>7}  {'s/task':>6}  model (effort)")
-    for total, _, _, mid, r in ranked[:top]:
-        effort = r.get("effort") or "default"
+
+    def line(total, mid, value, r, suffix=""):
         secs = r.get("sec_per_task")
-        est = " ~est" if r.get("intelligence_is_estimated") else ""
-        mark = "   <= in the slot now" if mid == baseline else ""
-        print(f"  {total:6.3f}  {r[quality]:6.1f}  {r['cost_per_task']:7.3f}  "
-              f"{secs if secs is not None else float('nan'):6.0f}  {mid} ({effort}){est}{mark}")
-    if baseline and baseline not in {mid for _, _, _, mid, _ in ranked[:top]}:
-        for pos, (total, _, _, mid, r) in enumerate(ranked, 1):
+        effort = r.get("effort") or "default"
+        est = " ~est" if aa_native and r.get("intelligence_is_estimated") else ""
+        print(f"  {total:6.3f}  {value:6.1f}  {r['cost_per_task']:7.3f}  "
+              f"{secs if secs is not None else float('nan'):6.0f}  {mid} ({effort}){est}{suffix}")
+
+    for total, mid, value, r in ranked[:top]:
+        line(total, mid, value, r, "   <= in place now" if mid == baseline else "")
+    if baseline and baseline not in {mid for _, mid, _, _ in ranked[:top]}:
+        for pos, (total, mid, value, r) in enumerate(ranked, 1):
             if mid == baseline:
-                print(f"  ...\n  {total:6.3f}  {r[quality]:6.1f}  {r['cost_per_task']:7.3f}  "
-                      f"{r.get('sec_per_task') or float('nan'):6.0f}  {mid} ({r.get('effort') or 'default'})"
-                      f"   <= in the slot now, rank {pos}")
+                line(total, mid, value, r, f"   <= in place now, rank {pos}")
                 break
-    print("\nEffort is a request parameter, not a model id: every variant above is")
-    print("reachable under the id shown. The wrapper sets effort per session, not")
-    print("per slot, so note which variant a pick was validated at.")
+
+    if aa_native:
+        print("\nEffort is a request parameter, not a model id: every variant above is")
+        print("reachable under the id shown, and the effort level moves both columns.")
+    else:
+        print(f"\n{quality} is not scored per reasoning effort, so each model appears once,")
+        print("priced at its cheapest measured variant. The effort shown is where that")
+        print("price came from, not the effort the benchmark was run at.")
     return 0
 
 
@@ -255,6 +283,7 @@ def main() -> int:
     ap.add_argument("--score", choices=sorted(PROFILES), help="rank the field for one wrapper slot")
     ap.add_argument("--weight-cost", type=float, help="override the slot's cost weight")
     ap.add_argument("--include-gemini", action="store_true", help="stop excluding cache-broken vendors")
+    ap.add_argument("--metric", help="score on this metric instead of the profile's")
     ap.add_argument("--min-metric", type=float, help="drop variants below this score before ranking")
     ap.add_argument("--include-anthropic", action="store_true",
                     help="rank Anthropic ids too — the models the wrapper replaces")
@@ -275,7 +304,8 @@ def main() -> int:
         if not aa_index:
             print("no aa.json in the work dir — run fetch-benchmarks.sh first", file=sys.stderr)
             return 2
-        return score_slot(aa_index, profile, weight, args.include_gemini,
+        metric = args.metric or profile["quality"]
+        return score_slot(scores, aa_index, metric, weight, args.include_gemini,
                           args.include_anthropic, args.top, args.baseline, args.min_metric)
 
     def rate(mid, key):
