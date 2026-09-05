@@ -78,9 +78,17 @@ fail once the session passes it. And the window depends on the *pinned*
 providers, not on the model in general — the same model is served with wildly
 different windows by different endpoints.
 
-## 2. Pull the benchmark data
+**Expect this number to differ from the wrapper's, and trust the wrapper's.**
+`provider-tiers.py` pins the exact cheapest price and takes whatever window that
+endpoint has; the wrapper takes a 10% price band and then drops endpoints
+serving less than half the band's best window, precisely so one cramped
+endpoint cannot drag the whole session's compaction threshold down. On
+`z-ai/glm-5.3` that is the difference between 262,144 and 1,048,576 tokens. Only
+export the values above if the wrapper failed to resolve tiers at all — a value
+you export wins over the one it derives (`env.setdefault`), so a stale export
+caps the session for no reason.
 
-Reuse the sibling skill's fetcher; there is no second copy to keep in sync.
+## 2. Pull the benchmark data
 
 ```bash
 bash .claude/skills/update-cli-models/scripts/fetch-benchmarks.sh /tmp/cli-review
@@ -88,7 +96,75 @@ python3 .claude/skills/update-cli-models/scripts/select-models.py \
   /tmp/cli-review --baseline <current-model-for-this-slot> --inventory
 ```
 
-## 3. Choose per slot — the requirements differ from the agents'
+Three surfaces land in the work directory, none a superset of another:
+
+| File | Source | What only it has |
+|---|---|---|
+| `models.json` | OpenRouter `/api/v1/models` | Authoritative pricing, the design-arena Elos, `benchmarks.artificial_analysis` for ~180 models |
+| `bench.json` | OpenRouter `/api/v1/benchmarks` (auth, via container) | tau-bench, GPQA, the search suite |
+| `aa.json` | artificialanalysis.ai leaderboard (no auth) | **Cost per indexed task**, time per task, and one row per reasoning-effort level |
+
+The third is the one that answers "what does an actual task cost here". The
+catalogue prices a token; a reasoning model's bill is decided by how many tokens
+it spends thinking, which the price list cannot show. Two models at the same
+$/M differ by 3x per task — `gpt-5.6-sol (medium)` costs $0.367 a task,
+`(max)` $1.249, same id and same price list.
+
+Its numbers are namespaced `aa:` in `--inventory` so they never silently
+overwrite the catalogue's flattened figures; where both exist, disagreement
+between them is worth a look rather than an average.
+
+Two caveats the script prints for itself: cost-per-task exists for ~50 rows (the
+current frontier, not the long tail), and the leaderboard is parsed out of the
+page's own data payload, so a site redesign breaks the fetch loudly rather than
+returning a short list.
+
+## 3. Rank each slot on quality *and* measured cost
+
+```bash
+python3 .claude/skills/update-cli-models/scripts/select-models.py \
+  /tmp/cli-review --score fable --min-metric 50 --baseline <slot's current model>
+```
+
+`--score` ranks every (model, effort) pair for one slot:
+
+    score = quality_norm - weight_cost * log10(cost_per_task)_norm
+
+Cost is normalized in log space because the field spans three orders of
+magnitude; on a linear scale the cheapest model wins every slot by arithmetic
+alone. The weights encode how often the slot runs and how much its output
+matters:
+
+| Slot | Metric | Cost weight | Reasoning |
+|---|---|---|---|
+| `main` / `sonnet` | `agentic_index` | 1.0 | Runs all session and re-sends the whole prompt each turn; cost weighs as heavily as capability |
+| `opus` / subagent | `coding_index` | 0.6 | Delegated work arrives complete; raw ability carries it, and it runs less often |
+| `haiku` | `agentic_index` | 2.0 | Highest-frequency, lowest-stakes slot — cheap beats clever |
+| `fable` | `intelligence_index` | 0.35 | The escalation slot: allowed to be expensive, not allowed to be pointless |
+
+**Always pair a low cost weight with `--min-metric`.** A quality-minus-cost
+ranking with a light cost weight still floats cheap mid-tier models into the top
+of the escalation slot, because a small quality deficit is bought off by a large
+price gap. The floor is what makes the slot mean anything: for `fable`, 50 on
+the AA intelligence index is the current frontier's edge.
+
+Two vendor classes are excluded by default and the script says so in its header
+line: `google/*` (their cache bills above uncached list price through this
+gateway — `references/why-caching-gates-this.md`) and `anthropic/*` (the models
+this wrapper exists to replace; `--include-anthropic` ranks them anyway, which
+is the honest way to see what the substitution costs).
+
+**Effort is a request parameter, not a model id.** All of `meta/muse-spark-1.3`'s
+rows are one endpoint; AA scores them separately because the effort level moves
+both the score and the bill. The wrapper sets effort per session
+(`claude --effort`, `DEFAULT_EFFORT`), not per slot, so a pick validated at one
+effort is a claim about that effort only — record which one.
+
+## 4. Choose per slot — the requirements differ from the agents'
+
+`--score` above already ranks each slot on the AA surface. This table is the
+cross-check: the head-to-head arena Elos live only in the catalogue, and for a
+coding harness a head-to-head beats a static index.
 
 This is a **coding** harness, so the metrics differ from the chat agents':
 
@@ -99,13 +175,17 @@ This is a **coding** harness, so the metrics differ from the chat agents':
 | `haiku` | `agentic_index` at the lowest price that clears it | Small internal calls. Cheap matters more than clever; it is the highest-frequency slot. |
 | `fable` | `intelligence_index` | The escalation slot. Allowed to be expensive; that is its job. |
 
-Two rules that are not negotiable here:
+Three rules that are not negotiable here:
 
 - **Keep the slot count of distinct models low.** Every additional model is
-  another entry in the provider union (step 5) and another thing to re-validate.
+  another entry in the provider union (step 6) and another thing to re-validate.
   Two or three distinct models across five slots is a good shape.
-- **Every model must clear the cache gate in step 4.** A model that wins its
+- **Every model must clear the cache gate in step 5.** A model that wins its
   benchmark and does not cache is not a candidate; over 99% of a turn is prompt.
+
+- **A pick must win on both surfaces or the disagreement must be explained.** A
+  model that tops `--score` and sits mid-field on `arena:agents:fullstack` is
+  cheap at reasoning, not good at driving a repo.
 
 Run the selection per slot with that slot's current model as the baseline:
 
@@ -114,7 +194,7 @@ python3 .claude/skills/update-cli-models/scripts/select-models.py \
   /tmp/cli-review --baseline <slot's current model> --usecases /tmp/cli-review/usecases.json
 ```
 
-## 4. Prove every candidate caches
+## 5. Prove every candidate caches
 
 ```bash
 C=$(docker ps --format '{{.Names}}' | grep -m1 nanoclaw)
@@ -128,7 +208,7 @@ injection on the outbound leg — no key is handled. Reject anything that does
 not read its prefix back at a discount; reject outright the signature
 `read == write == the whole prompt` at or above list input price.
 
-## 5. Update the model list
+## 6. Update the model list
 
 The wrapper carries one `MODELS` dict near the top. Edit it; there is nothing
 else to wire, because the wrapper already does at every launch what an operator
@@ -164,13 +244,17 @@ docker exec -e NO_PROXY=127.0.0.1,localhost,::1 "$C" sh -c \
      curl -sS -o /dev/null -w "$m %{http_code}\n" -X POST "$ANTHROPIC_BASE_URL/v1/messages" \
        -H "authorization: Bearer $ANTHROPIC_AUTH_TOKEN" -H "anthropic-version: 2023-06-01" \
        -H "content-type: application/json" \
-       -d "{\"model\":\"$m\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"provider\":{\"only\":[<the slugs>],\"allow_fallbacks\":true}}"
+       -d "{\"model\":\"$m\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"provider\":{\"only\":[<the slugs>],\"allow_fallbacks\":true}}"
    done'
 ```
 
-Anything but `200` means that model is not served by the union.
+Anything but `200` means that model is not served by the union — with one
+routing-unrelated exception: some providers reject a tiny `max_tokens` outright
+(Meta wants `>= 16`) and answer `400` from inside the request they did accept.
+Read the body before concluding anything; a real union miss says so in the
+message.
 
-## 6. Measure
+## 7. Measure
 
 The wrapper prints a per-model token breakdown and two cost figures when the
 session ends: a price-table estimate, and what the gateway actually billed
@@ -185,7 +269,7 @@ Gemini problem in `references/why-caching-gates-this.md` was found.
 `NO_SUMMARY=1` skips the report; the token breakdown comes from the CLI's own
 transcript under `~/.claude/projects/`, so it needs no gateway access.
 
-## 7. Write it down
+## 8. Write it down
 
 `FORK-CHANGELOG.md` — the wrapper is tracked, so the change belongs there.
 Record what was measured, not only what was chosen: the cache-gate result per
@@ -194,10 +278,10 @@ validated, not guessed.
 
 ## Integration points
 
-This skill edits one dict in a self-contained Python script and reads two public
-HTTP APIs. It makes no reach-in into NanoClaw source and adds no dependency, so
+This skill edits one dict in a self-contained Python script and reads three
+public HTTP surfaces (two OpenRouter APIs and one HTML page). It makes no reach-in into NanoClaw source and adds no dependency, so
 it owes no integration test (`docs/skill-guidelines.md`, "When there is
-genuinely nothing to test in-tree"). Its verification is steps 4, 5 and 6, each
+genuinely nothing to test in-tree"). Its verification is steps 5, 6 and 7, each
 of which produces numbers that are absent or wrong if the workflow was skipped.
 
 The wrapper itself is standalone too: one file, Python standard library only, no
@@ -225,6 +309,18 @@ transient lookup failure looks the same. Check the ids in `MODELS` are
 **The wrapper is slow to start.** It resolves provider tiers on every launch,
 one HTTP call per distinct model, in parallel. A slow gateway shows up here.
 That is the deliberate trade for never serving a stale price.
+
+**A candidate returns `18+ age confirmation` on every probe turn.** Some
+OpenRouter models are gated behind an account-level setting; the gateway cannot
+answer it and every request fails identically until it is set at
+<https://openrouter.ai/settings/preferences> on the account whose key OneCLI
+holds. The cache gate cannot be run before that, so the model is not adoptable —
+not because it failed, but because it was never measured.
+
+**`fetch-artificialanalysis.py` exits with "parsed only N models".** The
+leaderboard's data payload changed shape. That is a parser fix, not a retry: the
+script refuses a partial list on purpose, because a selection built on whichever
+few rows survived a layout change looks exactly like a valid one.
 
 **Spend looks unchanged after the switch.** Check the wrapper's first two lines:
 if it names no providers, the pin was skipped. If the session summary's two cost

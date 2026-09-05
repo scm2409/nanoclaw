@@ -11,6 +11,63 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-05 — The CLI model skill learns what a task costs, not just what a token costs
+
+`/update-cli-models` picked models from OpenRouter's two benchmark surfaces,
+which between them price a token and score three indices for about 180 models.
+Neither can say what one task actually costs, and for a reasoning model that is
+the number that decides the bill: the tokens spent thinking are invisible on a
+price list. `openai/gpt-5.6-sol` bills $0.367 for one task of the Artificial
+Analysis index at `medium` effort and $1.249 at `max` — one id, one price list,
+3.4x the money.
+
+The skill now reads artificialanalysis.ai as a third surface. Its leaderboard
+page ships ~640 model rows inside its own data payload, no key needed, and every
+row carries `openrouterApiId`, so the join to the catalogue is published rather
+than guessed. `scripts/fetch-artificialanalysis.py` parses it into `aa.json`;
+`fetch-benchmarks.sh` calls it alongside the two existing fetches. The parse
+fails loudly below 200 rows, because a selection built on whichever handful of
+rows survived a site redesign looks exactly like a valid one.
+
+`select-models.py` grew a `--score <slot>` mode that ranks every (model,
+reasoning-effort) pair for one wrapper slot by
+`quality_norm - weight_cost * log10(cost_per_task)_norm`. Cost is normalized in
+log space because the field spans three orders of magnitude; on a linear scale
+the cheapest model wins every slot by arithmetic. Each slot carries its own cost
+weight — 2.0 for `haiku`, which runs constantly and decides little, down to 0.35
+for `fable`, which is the escalation slot and is allowed to be expensive. A
+light cost weight needs `--min-metric` next to it, or a cheap mid-tier model
+floats to the top of the escalation slot on price alone. Anthropic ids are
+excluded by default, since they are what the wrapper exists to replace, and
+Google ids stay excluded for the cache reason already documented.
+
+On this data the `fable` slot's answer is `meta/muse-spark-1.3`, and it is now
+in the wrapper. Intelligence 53.0 at max effort against `x-ai/grok-4.6`'s 50.6,
+$0.959 per task against $1.254, half the input price. The cache gate was run
+before adoption and passed clearly: $1.250/M cold, **$0.159/M** warm at a 99%
+prefix hit, which is the discount the price list advertises rather than the
+Gemini pattern of billing a cache above uncached list. The provider union serves
+all three models, and the context window the wrapper derives is unchanged.
+
+Two things that cost time and are now written down where they will be hit again.
+The union check in the skill sent `max_tokens: 8`, and Meta's endpoint rejects
+anything below 16 — a `400` that reads exactly like a routing failure but comes
+from inside a request the provider accepted. The snippet now sends 32 and the
+skill says to read the body. Separately, `provider-tiers.py` and the wrapper
+disagree about the context window by a factor of four on `z-ai/glm-5.3`: the
+script pins the exact cheapest endpoint and reports its 262k window, the wrapper
+takes a 10% price band and drops endpoints below half the band's best window,
+reaching 1M. The wrapper is right for its own purpose, and following the skill's
+old instruction to export the script's number would have capped every session at
+a quarter of the available context.
+
+Reasoning effort remains session-global (`claude --effort`, `DEFAULT_EFFORT`);
+the wrapper cannot set it per slot, because `CLAUDE_CODE_EXTRA_BODY` is merged
+into every request alike. A pick validated at one effort level is a claim about
+that effort only, and the skill now says so where the numbers are read.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-03 — The CLI wrapper becomes one standalone Python file that reports its own cost
 
 `claude_openrouter.sh` had grown a dependency on a helper inside a skill folder

@@ -58,17 +58,26 @@ from pathlib import Path
 # Gemini model here — through this gateway they bill a cache above their own
 # uncached price.
 #
-#                        intel  coding  agentic   in/out $/M     warm
-#   z-ai/glm-5.3-flash    57.5    71.5     58.2  0.075/0.250  $0.015/M
-#   z-ai/glm-5.3          59.5    74.8     59.1  1.400/4.400  $0.143/M
-#   x-ai/grok-4.6         60.9    76.8     58.7  2.000/6.000  $0.504/M
+# Indices are Artificial Analysis, index version 4.2 (2026-09-05); $/task is what
+# one task of that index costs end to end, which is the figure a price list
+# cannot show for a reasoning model. `warm` is measured by cache-probe.ts.
+#
+#                        intel  coding  agentic   in/out $/M     warm     $/task
+#   z-ai/glm-5.3-flash    46.2    71.5     51.5  0.075/0.250  $0.015/M    0.183
+#   z-ai/glm-5.3          48.6    74.8     53.6  1.400/4.400  $0.143/M    1.259
+#   meta/muse-spark-1.3   53.0    76.3     55.6  1.250/4.250  $0.159/M    0.959 (max)
+#                         51.6    76.5     52.1                           0.840 (xhigh)
+#
+# The fable slot ran on x-ai/grok-4.6 (50.6 / 76.8 / 53.6, 2.000/6.000, $1.254 a
+# task) until 2026-09-05: less capable, twice the input price, and a third more
+# per task.
 # ---------------------------------------------------------------------------
 MODELS = {
     "ANTHROPIC_MODEL": "z-ai/glm-5.3-flash",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "z-ai/glm-5.3-flash",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "z-ai/glm-5.3-flash",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "z-ai/glm-5.3",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "x-ai/grok-4.6",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "meta/muse-spark-1.3",
     "CLAUDE_CODE_SUBAGENT_MODEL": "z-ai/glm-5.3",
 }
 

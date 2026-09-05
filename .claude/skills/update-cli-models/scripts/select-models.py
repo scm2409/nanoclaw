@@ -8,6 +8,13 @@ model at least as good as a baseline and no more expensive.
 `--inventory` prints every metric with its coverage and the baseline's score,
 which is how you pick a metric for a use case in the first place.
 
+    select-models.py <work-dir> --score <slot> [--weight-cost <w>]
+
+`--score` ranks the field for one wrapper slot by Artificial Analysis' measured
+quality *and* its measured cost per indexed task, which is the only surface that
+prices a whole task rather than a token. It needs `aa.json` in the work dir
+(fetch-benchmarks.sh writes it).
+
 Candidates are ranked by a 4:1 prompt-to-completion price blend, which suits
 agent traffic: the prompt is re-sent whole on every turn, the completion is a
 few hundred tokens. `:batch` (not usable interactively) and `:free` (rate
@@ -15,11 +22,50 @@ limits, training-data terms) variants are excluded.
 """
 import argparse
 import json
+import math
 import os
 import sys
 from collections import defaultdict
 
 PROMPT_TO_COMPLETION_BLEND = 4
+
+# Gemini through OpenRouter returns cache_read == cache_creation and bills above
+# its own uncached list price, so a Gemini pick is a cost regression however good
+# its benchmarks look. See references/why-caching-gates-this.md; --include-gemini
+# overrides this for the day that changes.
+CACHE_BROKEN_VENDORS = ("google/",)
+
+# The wrapper exists to run Claude Code on something other than Anthropic's own
+# models, so an Anthropic id routed through OpenRouter is not a candidate — it is
+# the thing being replaced, at list price plus a hop. --include-anthropic ranks
+# them anyway, which is the honest way to see what the substitution costs.
+REPLACED_VENDORS = ("anthropic/",)
+
+# Per-slot weighting for --score. `quality` names the AA metric that decides the
+# slot; `weight_cost` is how hard measured cost-per-task pulls against it, on the
+# same 0..1 normalized scale.
+#
+#   score = quality_norm - weight_cost * log_cost_norm
+#
+# Cost is normalized in log space because the field spans three orders of
+# magnitude: without it the cheapest model wins every slot by arithmetic alone.
+PROFILES = {
+    # The model you talk to all session. Every turn re-sends the whole prompt,
+    # so cost weighs as heavily as capability.
+    "main": {"quality": "agentic_index", "weight_cost": 1.0},
+    "sonnet": {"quality": "agentic_index", "weight_cost": 1.0},
+    # Delegated work arrives as a complete task; raw coding ability carries it,
+    # and it runs less often than the main slot.
+    "opus": {"quality": "coding_index", "weight_cost": 0.6},
+    "subagent": {"quality": "coding_index", "weight_cost": 0.6},
+    # Highest-frequency, lowest-stakes slot. Cheap beats clever.
+    "haiku": {"quality": "agentic_index", "weight_cost": 2.0},
+    # The escalation slot: allowed to be expensive, not allowed to be pointless.
+    # A light cost weight still rules out paying 6x for the last two index
+    # points, which is what the top of this field charges.
+    "fable": {"quality": "intelligence_index", "weight_cost": 0.35},
+}
+AA_METRICS = ("intelligence_index", "coding_index", "agentic_index")
 
 
 def load(work: str):
@@ -28,7 +74,11 @@ def load(work: str):
         bench = json.load(open(os.path.join(work, "bench.json")))["data"]
     except (FileNotFoundError, KeyError):
         bench = []
-    return models, bench
+    try:
+        aa = json.load(open(os.path.join(work, "aa.json")))["data"]
+    except (FileNotFoundError, KeyError):
+        aa = []
+    return models, bench, aa
 
 
 def build_index(models):
@@ -91,6 +141,107 @@ def collect_scores(models, bench, resolve):
     return scores
 
 
+def aa_by_model(aa, price):
+    """OpenRouter model id -> its Artificial Analysis rows, best variant first.
+
+    AA lists every reasoning-effort level of a model as its own row while the
+    whole family is reachable under one OpenRouter id, because effort is a
+    request parameter. Rows for ids the catalogue does not serve are dropped:
+    an unbuyable model is not a candidate.
+    """
+    out = defaultdict(list)
+    for r in aa:
+        mid = r.get("openrouter_id")
+        if mid and mid in price and not r.get("deprecated"):
+            out[mid].append(r)
+    for rows in out.values():
+        rows.sort(key=lambda r: -(r.get("intelligence_index") or 0))
+    return out
+
+
+def merge_aa_scores(scores, aa_index):
+    """Add `aa:<metric>` to the metric table, taking each model's best variant.
+
+    Namespaced because these are not the same numbers as the catalogue's
+    `intelligence_index`: AA's leaderboard tracks the current index version and
+    splits by reasoning effort, the catalogue carries one flattened figure per
+    model and covers far fewer of them. Keeping both lets a pick be cross-checked
+    instead of silently depending on which surface was fresher.
+    """
+    for mid, rows in aa_index.items():
+        for metric in AA_METRICS:
+            values = [r[metric] for r in rows if r.get(metric) is not None]
+            if values:
+                scores[f"aa:{metric}"][mid] = max(values)
+        costs = [r["cost_per_task"] for r in rows if r.get("cost_per_task") is not None]
+        if costs:
+            scores["aa:cost_per_task"][mid] = min(costs)
+
+
+def score_slot(aa_index, profile, weight_cost, include_gemini, include_anthropic, top,
+               baseline=None, min_metric=None):
+    """Rank (model, effort variant) pairs for one slot and print the table."""
+    quality = profile["quality"]
+    rows = [
+        (mid, r)
+        for mid, variants in aa_index.items()
+        for r in variants
+        if r.get(quality) is not None
+        and r.get("cost_per_task") is not None
+        and usable(mid)
+        and (include_gemini or not mid.startswith(CACHE_BROKEN_VENDORS))
+        and (include_anthropic or not mid.startswith(REPLACED_VENDORS))
+        and (min_metric is None or r[quality] >= min_metric)
+    ]
+    if not rows:
+        print("no model has both a score for this metric and a measured cost per task.")
+        print("aa.json missing or stale? run fetch-benchmarks.sh again.")
+        return 1
+
+    qs = [r[quality] for _, r in rows]
+    cs = [math.log10(r["cost_per_task"]) for _, r in rows if r["cost_per_task"] > 0]
+    qlo, qhi = min(qs), max(qs)
+    clo, chi = min(cs), max(cs)
+
+    def norm(v, lo, hi):
+        return 0.0 if hi == lo else (v - lo) / (hi - lo)
+
+    ranked = []
+    for mid, r in rows:
+        cost = max(r["cost_per_task"], 10 ** clo)
+        q = norm(r[quality], qlo, qhi)
+        c = norm(math.log10(cost), clo, chi)
+        ranked.append((q - weight_cost * c, q, c, mid, r))
+    ranked.sort(key=lambda x: -x[0])
+
+    floor = f", floor {min_metric}" if min_metric is not None else ""
+    print(f"metric {quality}, cost weight {weight_cost}{floor}")
+    skipped = [w for w, on in ((CACHE_BROKEN_VENDORS, include_gemini),
+                               (REPLACED_VENDORS, include_anthropic)) if not on]
+    excluded = ", ".join(v.rstrip("/") for group in skipped for v in group) or "nothing"
+    print(f"{len(rows)} scored variants across {len({m for m, _ in rows})} models "
+          f"(excluded: {excluded})\n")
+    print(f"  {'score':>6}  {'metric':>6}  {'$/task':>7}  {'s/task':>6}  model (effort)")
+    for total, _, _, mid, r in ranked[:top]:
+        effort = r.get("effort") or "default"
+        secs = r.get("sec_per_task")
+        est = " ~est" if r.get("intelligence_is_estimated") else ""
+        mark = "   <= in the slot now" if mid == baseline else ""
+        print(f"  {total:6.3f}  {r[quality]:6.1f}  {r['cost_per_task']:7.3f}  "
+              f"{secs if secs is not None else float('nan'):6.0f}  {mid} ({effort}){est}{mark}")
+    if baseline and baseline not in {mid for _, _, _, mid, _ in ranked[:top]}:
+        for pos, (total, _, _, mid, r) in enumerate(ranked, 1):
+            if mid == baseline:
+                print(f"  ...\n  {total:6.3f}  {r[quality]:6.1f}  {r['cost_per_task']:7.3f}  "
+                      f"{r.get('sec_per_task') or float('nan'):6.0f}  {mid} ({r.get('effort') or 'default'})"
+                      f"   <= in the slot now, rank {pos}")
+                break
+    print("\nEffort is a request parameter, not a model id: every variant above is")
+    print("reachable under the id shown. The wrapper sets effort per session, not")
+    print("per slot, so note which variant a pick was validated at.")
+    return 0
+
+
 def usable(mid: str) -> bool:
     return not mid.endswith((":batch", ":free"))
 
@@ -98,15 +249,34 @@ def usable(mid: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("work")
-    ap.add_argument("--baseline", required=True, help="model id to beat, e.g. google/gemini-3.7-flash")
+    ap.add_argument("--baseline", help="model id to beat, e.g. google/gemini-3.7-flash; required unless --score")
     ap.add_argument("--usecases", help="JSON list of {agent, metric, why}")
     ap.add_argument("--inventory", action="store_true", help="list every metric and its coverage")
+    ap.add_argument("--score", choices=sorted(PROFILES), help="rank the field for one wrapper slot")
+    ap.add_argument("--weight-cost", type=float, help="override the slot's cost weight")
+    ap.add_argument("--include-gemini", action="store_true", help="stop excluding cache-broken vendors")
+    ap.add_argument("--min-metric", type=float, help="drop variants below this score before ranking")
+    ap.add_argument("--include-anthropic", action="store_true",
+                    help="rank Anthropic ids too — the models the wrapper replaces")
     ap.add_argument("--top", type=int, default=10)
     args = ap.parse_args()
+    if not args.score and not args.baseline:
+        ap.error("--baseline is required unless --score names a slot")
 
-    models, bench = load(args.work)
+    models, bench, aa = load(args.work)
     price, by_canon = build_index(models)
     scores = collect_scores(models, bench, make_resolver(price, by_canon))
+    aa_index = aa_by_model(aa, price)
+    merge_aa_scores(scores, aa_index)
+
+    if args.score:
+        profile = PROFILES[args.score]
+        weight = args.weight_cost if args.weight_cost is not None else profile["weight_cost"]
+        if not aa_index:
+            print("no aa.json in the work dir — run fetch-benchmarks.sh first", file=sys.stderr)
+            return 2
+        return score_slot(aa_index, profile, weight, args.include_gemini,
+                          args.include_anthropic, args.top, args.baseline, args.min_metric)
 
     def rate(mid, key):
         try:
