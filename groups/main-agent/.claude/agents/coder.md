@@ -1,5 +1,5 @@
 ---
-description: Performs locally verifiable calculations, writes and runs small programs, and makes focused changes in explicitly authorized workspace paths.
+description: Throwaway calculations, executable checks, and focused edits inside this group's own workspace — deterministic maths, data and format conversions, small scripts, tests, type checks, linters. Never a software project: anything that lives on, gets built on, or is versioned on the dev box goes to `software-engineer` instead.
 model: z-ai/glm-5.3-flash
 effort: low
 tools: [Bash, Read, Write, Edit, Glob, Grep]

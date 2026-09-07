@@ -32,6 +32,11 @@ if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
     BUILD_ARGS+=(--build-arg INSTALL_CJK_FONTS=true)
 fi
 
+# Give the image's `node` user the host user's uid/gid. Containers run as the
+# host uid (see src/container-runner.ts), and a uid with no name breaks tools
+# that look themselves up — ssh most visibly.
+BUILD_ARGS+=(--build-arg "AGENT_UID=$(id -u)" --build-arg "AGENT_GID=$(id -g)")
+
 echo "Building NanoClaw agent container image..."
 echo "Image: ${IMAGE_NAME}:${TAG}"
 

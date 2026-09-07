@@ -173,7 +173,15 @@ export async function run(args: string[]): Promise<void> {
 
   // Build-args from .env. Only INSTALL_CJK_FONTS is passed through today.
   // Keeps /setup and ./container/build.sh in sync — both read the same source.
+  // AGENT_UID/AGENT_GID are not from .env: they name the host user, because
+  // containers run as that uid (src/container-runner.ts) and a uid with no
+  // /etc/passwd entry breaks tools that look themselves up, ssh most visibly.
   const buildArgs: string[] = [];
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid != null && gid != null) {
+    buildArgs.push(`--build-arg AGENT_UID=${uid}`, `--build-arg AGENT_GID=${gid}`);
+  }
   try {
     const fs = await import('fs');
     const envPath = path.join(projectRoot, '.env');

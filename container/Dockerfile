@@ -175,6 +175,22 @@ RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# ---- Host UID/GID alignment --------------------------------------------------
+# Containers are started with `--user <host uid>:<host gid>` whenever the host
+# user is not uid 1000 (src/container-runner.ts), so files on mounted host
+# directories stay readable and writable from both sides. That leaves the
+# running uid with no /etc/passwd entry, and tools that resolve their own
+# identity refuse to run: OpenSSH aborts with "No user exists for uid N" before
+# it opens a socket. Renumbering `node` to the host's ids gives that uid a name
+# again. Both default to 1000, so a build without these args is a no-op.
+# container/build.sh and setup/container.ts pass the real ids.
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+RUN set -eu; \
+    if [ "$AGENT_GID" != "$(id -g node)" ]; then groupmod -g "$AGENT_GID" node; fi; \
+    if [ "$AGENT_UID" != "$(id -u node)" ]; then usermod -u "$AGENT_UID" -g "$AGENT_GID" node; fi; \
+    chown -R node:node /home/node
+
 # ---- Workspace + permissions -------------------------------------------------
 RUN mkdir -p /workspace/group /workspace/extra && \
     chown -R node:node /workspace && \

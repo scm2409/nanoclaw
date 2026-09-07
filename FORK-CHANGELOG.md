@@ -11,6 +11,57 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-07 — container image gets a name for the uid it runs as
+
+Agent containers run as the host user's uid (`--user` in `src/container-runner.ts`)
+so mounted host files stay usable from both sides, but the image's `/etc/passwd` only
+knew `node` at uid 1000. Any tool that looks its own identity up therefore found
+nothing; OpenSSH refuses outright with `No user exists for uid 1003`, which blocked the
+new `devbox` subagent before it ever opened a socket. The Dockerfile now takes
+`AGENT_UID` / `AGENT_GID` and renumbers `node` to match, with `container/build.sh` and
+`setup/container.ts` passing the host's real ids. Both default to 1000, so an
+arg-less build behaves as before, and per-agent-group images inherit it from the base.
+Placed late in the Dockerfile so the heavy layers stay cached.
+
+vibecoded with Claude Opus 5
+
+## 2026-09-07 — software-engineer subagent for KaiL01
+
+Added a `software-engineer` subagent to the main agent group: an SSH bridge to the devbox LXC
+(CT 108, `devbox.d71.box44.org`, unprivileged user `dev`), where KaiL is meant to
+implement software projects. It is named for the role rather than the machine, because it owns the whole project
+lifecycle — clarifying requirements, designing, documenting, delegating the coding to
+OpenCode and verifying it, testing, committing — and `coder`, its counterpart for
+throwaway work in KaiL01's own workspace, had its description sharpened into an
+explicit either/or so the two are not confused at delegation time. It reports the
+assumptions it worked under and the questions it needs answered instead of guessing,
+and every project carries its own `README.md`, `docs/decisions.md` and, for larger
+work, `docs/requirements.md`, written in the same commit as the change. The
+instructions pin the SSH invocation (fixed key path,
+pinned `known_hosts`, `StrictHostKeyChecking=yes`, `BatchMode`), put every project in
+its own `/home/dev/projects/<slug>/` directory under local-only git (no remote exists
+yet, so pushes and remote setup are forbidden), and route bulk coding through the dev
+box's headless OpenCode rather than hand-edits over SSH. Package installs stay in user
+space with release-age gates intact; anything needing root is reported back for Martin
+to run as CT root. The subagent runs on `openai/gpt-5.6-luna` at max effort. KaiL01's
+standing instructions gained a matching delegation section that draws the line against
+`coder` — if the result deserves a git commit, it belongs on the dev box — and that
+forbids ordering resets, deletions or history rewrites while no remote repository
+exists.
+
+The subagent also carries an isolation policy: nothing a project needs may be
+installed into the dev box itself. Runtime versions are pinned in the repository
+(`mise.toml`, `.python-version`, `rust-toolchain.toml`, `go.mod`), Python goes through
+`uv` with a committed `uv.lock` and managed interpreters only, Node through mise plus a
+`packageManager` pin, and anything wanting system libraries or a service goes into a
+rootless Podman container rather than becoming an apt request. The rule of thumb in the
+file: a dependency that cannot be expressed as a pinned file in the repository belongs
+in a container. The dev box account backs this with environment guards
+(`PIP_REQUIRE_VIRTUALENV`, `UV_PYTHON_PREFERENCE=only-managed`, `npm_config_prefix`),
+so the policy holds even when an agent forgets it.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-05 — The provider pin stops routing to endpoints whose cache does not work
 
 KaiL01's wire trace showed 48% of 5.9M prompt tokens billed at full input price
