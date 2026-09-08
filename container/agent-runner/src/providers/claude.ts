@@ -7,6 +7,7 @@ import {
   type HookCallback,
   type ModelUsage,
   type PreCompactHookInput,
+  type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
@@ -229,6 +230,62 @@ export function providerPinEnv(
   // own, possibly with unrelated fields; do not merge into it blind.
   if (env.CLAUDE_CODE_EXTRA_BODY) return {};
   return { CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ provider: pin }) };
+}
+
+/**
+ * A turn that died because the pin no longer routes anywhere.
+ *
+ * The pin is resolved host-side at spawn and frozen into the container's env,
+ * but the gateway's roster moves underneath a long-lived container. Observed
+ * live: a provider stopped serving `glm-5.3-flash` mid-session and every later
+ * request came back `404 not_found_error` — "No allowed providers are available
+ * for the selected model" — which the CLI renders as the first pattern below.
+ * `allow_fallbacks` does not rescue it; the list is authoritative.
+ *
+ * Both spellings are matched because only the second is the gateway's own
+ * wording: it is what the raw response carries, but the SDK hands us the CLI's
+ * rendering, and which of the two surfaces is not ours to control.
+ *
+ * The CLI's message is also what a genuinely wrong model name or a real access
+ * problem produces. Retrying those once unpinned costs one wasted call and then
+ * reports the same error — an acceptable price for not needing to tell the two
+ * apart from a rendered string.
+ */
+const PROVIDER_ROUTING_ERROR_RE = /issue with the selected model|no allowed providers are available/i;
+
+/**
+ * The message of a failed turn, or null for anything else.
+ *
+ * Mirrors the translator's own extraction: `result` carries the text on
+ * success subtypes, error subtypes put it in `errors[]` instead.
+ */
+function resultErrorText(message: SDKMessage): string | null {
+  if (message.type !== 'result') return null;
+  const m = message as { is_error?: boolean; result?: string; errors?: string[] };
+  if (m.is_error !== true) return null;
+  if (typeof m.result === 'string' && m.result.trim().length > 0) return m.result;
+  if (m.errors && m.errors.length > 0) return m.errors.join('\n');
+  return null;
+}
+
+/**
+ * The same env with our own pin removed, or null if there is nothing of ours to
+ * remove.
+ *
+ * Identity is by exact value, not by "has a `provider` key": an operator who
+ * set `CLAUDE_CODE_EXTRA_BODY` themselves has made a routing decision that
+ * `providerPinEnv` already refuses to overwrite, and a failing turn is not a
+ * mandate to overrule it either. Their pin fails visibly instead, which is what
+ * a deliberate setting should do.
+ */
+function withoutProviderPin(
+  env: Record<string, string | undefined>,
+  ours: string | undefined,
+): Record<string, string | undefined> | null {
+  if (!ours || env.CLAUDE_CODE_EXTRA_BODY !== ours) return null;
+  const stripped = { ...env };
+  delete stripped.CLAUDE_CODE_EXTRA_BODY;
+  return stripped;
 }
 
 // MCP server names are sanitized by the SDK when forming tool prefixes:
@@ -745,6 +802,8 @@ export class ClaudeProvider implements AgentProvider {
   private model?: string;
   private effort?: string;
   private transcriptRotateDays?: number;
+  /** The exact `CLAUDE_CODE_EXTRA_BODY` our own pin produced, if any. */
+  private pinEnvValue?: string;
   private memorySessionHook?: MemorySessionHookRegistration;
 
   constructor(options: ProviderOptions = {}) {
@@ -762,10 +821,12 @@ export class ClaudeProvider implements AgentProvider {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     };
+    const pinEnv = providerPinEnv(options.providerPin, baseEnv);
+    this.pinEnvValue = pinEnv.CLAUDE_CODE_EXTRA_BODY;
     this.env = {
       ...baseEnv,
       ...stickySessionEnv(options.agentGroupId, baseEnv),
-      ...providerPinEnv(options.providerPin, baseEnv),
+      ...pinEnv,
     };
   }
 
@@ -816,7 +877,7 @@ export class ClaudeProvider implements AgentProvider {
 
   query(input: QueryInput): AgentQuery {
     if (!this.memorySessionHook) throw new Error('Claude memory session hook was not registered');
-    const stream = new MessageStream();
+    let stream = new MessageStream();
     stream.push(input.prompt);
 
     const instructions = input.systemContext?.instructions;
@@ -833,12 +894,18 @@ export class ClaudeProvider implements AgentProvider {
     // through the proxy.
     const aliasEnv = buildModelAliasEnv(this.model, input.cwd);
 
-    const sdkResult = sdkQuery({
-      prompt: stream,
+    // The env an attempt runs with. Mutable because a turn the pin has locked
+    // out of every endpoint is retried once with the pin dropped — see
+    // PROVIDER_ROUTING_ERROR_RE.
+    let attemptEnv: Record<string, string | undefined> = { ...this.env, ...aliasEnv };
+
+    const startSdk = (promptStream: MessageStream, env: Record<string, string | undefined>, resume?: string) =>
+      sdkQuery({
+      prompt: promptStream,
       options: {
         cwd: input.cwd,
         additionalDirectories: this.additionalDirectories,
-        resume: input.continuation,
+        resume,
         pathToClaudeCodeExecutable: '/pnpm/claude',
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
@@ -846,7 +913,7 @@ export class ClaudeProvider implements AgentProvider {
         allowedTools: [...TOOL_ALLOWLIST, ...Object.keys(this.mcpServers).map(mcpAllowPattern)],
         disallowedTools: SDK_DISALLOWED_TOOLS,
         agents: fileSubagents,
-        env: { ...this.env, ...aliasEnv },
+        env,
         model: this.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         effort: this.effort as any,
@@ -863,8 +930,11 @@ export class ClaudeProvider implements AgentProvider {
       },
     });
 
+    let sdkResult = startSdk(stream, attemptEnv, input.continuation);
+
     let aborted = false;
     const mainModel = this.model;
+    const pinEnvValue = this.pinEnvValue;
     // Lazily populated on the first subagent invocation and reused for the
     // rest of this query — resolves subagent name -> model via the SDK's
     // Query.supportedAgents(), which mirrors the .claude/agents/*.md
@@ -872,10 +942,51 @@ export class ClaudeProvider implements AgentProvider {
     // model, so it's absent from the returned AgentInfo).
     let agentModels: Map<string, string> | null = null;
 
+    /**
+     * The SDK stream, with one recovery spliced in: a turn that ended because
+     * the provider pin routes nowhere is re-run unpinned, resuming the same
+     * session, and the failing result is swallowed so the poll loop never sees
+     * a turn that is about to succeed as a failure.
+     *
+     * The original prompt is pushed again rather than a "carry on" note. When
+     * the very first request of a turn is the one that 404s, it is unproven
+     * that the CLI has persisted the user's message to the transcript at all —
+     * resuming with anything else could silently drop it. A duplicate in the
+     * history costs tokens; a lost instruction costs the turn.
+     */
+    async function* sdkMessages(): AsyncGenerator<SDKMessage> {
+      let pinRetried = false;
+      let sessionId = input.continuation;
+      while (true) {
+        let restart = false;
+        for await (const message of sdkResult) {
+          if (message.type === 'system' && message.subtype === 'init') sessionId = message.session_id;
+
+          const failure = resultErrorText(message);
+          if (failure && !pinRetried && PROVIDER_ROUTING_ERROR_RE.test(failure)) {
+            const unpinned = withoutProviderPin(attemptEnv, pinEnvValue);
+            if (unpinned) {
+              pinRetried = true;
+              attemptEnv = unpinned;
+              log(`Provider pin routes nowhere — retrying turn unpinned: ${failure.slice(0, 160)}`);
+              stream = new MessageStream();
+              stream.push(input.prompt);
+              sdkResult = startSdk(stream, attemptEnv, sessionId);
+              restart = true;
+              break;
+            }
+          }
+
+          yield message;
+        }
+        if (!restart) return;
+      }
+    }
+
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
       let lastAssistantText: string | null = null;
-      for await (const message of sdkResult) {
+      for await (const message of sdkMessages()) {
         if (aborted) return;
         messageCount++;
 

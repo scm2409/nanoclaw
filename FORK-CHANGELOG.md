@@ -11,6 +11,40 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-08 — a dead provider pin no longer kills the turn
+
+The provider pin is resolved host-side at spawn and frozen into the container's
+env, but OpenRouter's endpoint roster moves underneath a container that lives
+for hours. It happened live: the daily refresh pinned `z-ai/glm-5.3-flash` to
+`relace`, which was briefly the cheapest tier at $0.07125/M, and by the next
+afternoon `relace` no longer served the model at all. Every request then came
+back `404 not_found_error` — "No allowed providers are available for the
+selected model" — which the CLI renders as "There's an issue with the selected
+model (...)". `allow_fallbacks` does not rescue that; the list is authoritative.
+A four-hour piece of work reported nothing, and every later message would have
+failed identically until an operator restarted the container by hand.
+
+The Claude provider now retries such a turn once with the pin dropped, resuming
+the same session so the turn keeps its history, and swallows the failed result
+so the poll loop never delivers a failure for a turn that is about to succeed.
+The original prompt is pushed again rather than a "carry on" note: when the very
+first request of a turn is the one that 404s, it is unproven that the CLI has
+persisted the user's message to the transcript, and a duplicate in the history
+is cheaper than a lost instruction. Only a pin this code wrote is dropped —
+identity is by exact `CLAUDE_CODE_EXTRA_BODY` value, so an operator who set
+their own routing keeps it and sees it fail, which is what a deliberate setting
+should do. The CLI's message is also what a genuinely wrong model name produces;
+those cost one wasted call and then report the same error, which beats telling
+the two apart from a rendered string.
+
+Deliberately not changed: the pin still takes the single cheapest tier, even
+when that tier has one member. Widening it to a minimum of two would trade a
+determinate cache endpoint for a coin flip between endpoints with measurably
+different cache behaviour (`z-ai` cold once then 99%; `novita` cold three turns
+of six), and the retry above already covers the failure that motivated it.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-07 — container image gets a name for the uid it runs as
 
 Agent containers run as the host user's uid (`--user` in `src/container-runner.ts`)
