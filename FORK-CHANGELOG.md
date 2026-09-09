@@ -11,6 +11,34 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-09 — standing rule for messages that arrive mid-turn
+
+The runner pushes a message that lands during a running turn straight into it,
+where it shows up as "The user sent a new message while you were working", and
+marks the row completed the moment it hands it over (`poll-loop.ts`). There is
+no redelivery: an injected message the agent reads past is gone from the
+conversation while the sender believes it was received. That is exactly what
+happened on 09.09 — two messages arrived, sat in context all afternoon
+unanswered, and were then reported to the user as never having arrived, on the
+strength of a gap in message ids.
+
+Closing the delivery-side window would mean acking a follow-up only after the
+turn produced a result instead of at push time. That touches redelivery
+semantics on the live install, so it stays untouched by choice; the risk of a
+half-right change there is worse than the failure it prevents.
+
+What is added instead is a standing rule in the group's instructions: check for
+an unanswered injected block before ending a turn, and if it cannot be handled
+now, say so in one sentence rather than silently continuing. Plus the part that
+would have prevented the false report — never claim a message did not arrive
+without checking the transcript first, since a gap in ids proves nothing (they
+count both sides) and `ncl dropped-messages list` answers a different question.
+
+Verified by asking the agent to state the rule back after a restart, so the
+regenerated persona fragment demonstrably carries it.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-09 — subagent calls default to the background
 
 A synchronous `Agent` call blocks the main thread for as long as the subagent

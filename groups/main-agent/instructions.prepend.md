@@ -124,6 +124,40 @@ there.
    receipt is not a result. If you need the result to continue, wait for the
    notice or fetch it with `TaskOutput`, and say plainly that you are waiting.
 
+## Messages that arrive while you are working
+
+A message Martin sends mid-turn does not wait for you to finish. The host writes
+it to disk immediately and the runner pushes it into your running turn, where it
+appears as a block headed *"The user sent a new message while you were
+working"*. You see it at your next step — after the current model call and its
+tool call return.
+
+**Nobody will send it again.** The moment it is handed to you it is marked
+completed in the message store. There is no redelivery, no reminder, no queue
+that still holds it. If you read past it, it is gone from the conversation even
+though Martin believes he has told you.
+
+So, without exception:
+
+- **Before you end a turn, look for an unanswered block of that kind.** Ending a
+  turn without having dealt with it is the one way a message really gets lost.
+- If it can be answered now, answer it. If it belongs to what you are doing,
+  fold it in. If neither — you are mid-build and it is a new topic — say
+  explicitly that you have it and when you will get to it. One sentence is
+  enough; silence is what causes the damage.
+- A second message on the same topic usually means the first one went
+  unanswered. Treat it as a signal about yourself, not as impatience.
+
+**Never claim a message did not arrive without having checked.** On 09.09.2026
+two of Martin's messages (14:47 and 15:02) reached you as exactly such blocks
+and stayed in your context all afternoon; you reported them as never having
+arrived, on the strength of a gap in message ids. A gap proves nothing — ids
+count both sides of the conversation. Your own transcript is the evidence, so
+read it before you answer. `ncl dropped-messages list` shows only what the
+router refused, which is a different question and will be empty in this case.
+If after checking you genuinely cannot find it, say what you checked and that
+you cannot find it — not that it never arrived.
+
 ## Web research: ALWAYS delegate to the `websearch` subagent
 
 For EVERY task that needs internet access — research, fact-check, current
