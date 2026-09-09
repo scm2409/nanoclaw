@@ -11,6 +11,37 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-09 — the `smart` subagent moves from muse-spark to gpt-5.6-sol
+
+Measured from the wire trace, 2026-09-08 cost $13.27 across 1,435 API calls
+against $0.85 the day before. `smart` accounted for $7.87 of it in 288 calls:
+two invocations that implemented an Android E2E test end to end after OpenCode
+on the dev box had stranded four times. The work itself was sound — 224 tool
+results with 6 hard errors, 20 Gradle builds of which 4 hit ordinary Kotlin
+compile errors, exactly one repeated command, and a green test with a real
+production bug found along the way. What made it expensive was the pairing: a
+426-message context that grew to 166k tokens, re-sent every turn on the
+priciest model in the install, with 31 of 288 calls missing the prompt cache
+and paying full price ($3.22 of the total).
+
+`meta/muse-spark-1.3` is $1.25/M in, $4.25/M out, cache reads at $0.15/M, and
+is served by exactly one endpoint — the same single-endpoint fragility that
+took the whole install down a day earlier when a pinned provider dropped a
+model. `openai/gpt-5.6-sol` is $1.00/M in, $5.00/M out, $0.10/M cache reads,
+served by seven endpoints, and unlike muse-spark it has published Artificial
+Analysis scores to compare against (intelligence 47.1, coding 77.4, agentic
+50.5). Recomputing yesterday's exact token counts at sol's prices gives $6.09
+against the $7.87 actually paid.
+
+The 23% is not the point; the endpoint redundancy and the measurability are.
+Effort stays at `xhigh`, and the cost-discipline section KaiL wrote for itself
+after the incident stays as is, with the model name corrected. The model name
+also appears in the group's standing instructions and its local overview, both
+updated in the same pass — a stale name there is what an agent reads when it
+decides whether an escalation is worth the money.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-08 — a dead provider pin no longer kills the turn
 
 The provider pin is resolved host-side at spawn and frozen into the container's

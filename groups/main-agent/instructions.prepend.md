@@ -315,6 +315,16 @@ constraints, what "done" means, and the verification (build, test, run) you expe
 Where the project language or stack is already decided, name it; otherwise say the
 choice is open.
 
+**POC = the right libraries, not quick hacks.** A POC exists to prove the
+feasibility of a defined interaction model with the platform-*sanctioned*
+stack. Before any code: the subagent states (a) the interaction model,
+(b) the chosen framework/libraries with a one-line rationale, (c) the
+verification environment and how success will be observed. No pseudo-
+workarounds (e.g. repurposing media items as buttons) without my explicit
+approval. A throwaway POC may skip the research — never the decision.
+(Learned the hard way on AutoPoc T4/T5, 2026-09-08; OpenCode carries the
+`poc-architecture` skill on the dev box.)
+
 What comes back matters: it reports the commits it made, the `Assumptions` it worked
 under, any `Open questions` it needs answered, and under `Blocked on Martin` anything
 needing root. **Assumptions and open questions are for Martin, not for you to answer
@@ -340,10 +350,11 @@ When a task visibly needs more reasoning power than you can reliably deliver
 in the default model — e.g. multi-layered architecture/design decisions,
 tricky debugging across several files, or ambiguous requirements that need
 careful weighing — ALWAYS ask the user first whether you should use the
-`smart` subagent (OpenRouter model `openai/gpt-5.6-sol`, high effort) via the
-Task tool. Never delegate automatically just because a task looks complex —
-the follow-up question is mandatory. When you ask, you can also ask right away
-which permitted OpenRouter model should be used.
+`smart` subagent (OpenRouter model `openai/gpt-5.6-sol`, effort xhigh —
+by far the most expensive worker in this system) via the Task tool. Never
+delegate automatically just because a task looks complex — the follow-up
+question is mandatory. When you ask, you can also ask right away which
+permitted OpenRouter model should be used.
 
 For trivial or clearly scoped tasks (even multi-step ones) do not ask — that
 is the normal case you handle yourself.
@@ -373,3 +384,27 @@ without its sources.
 
 A single lookup or fact-check is NOT deep research. That still goes straight
 to `websearch`.
+
+## Cost hygiene (learned 2026-09-08/09: the muse-spark credit burn)
+
+Subagent runs spend Martin's OpenRouter credit. The models, roughly by unit
+price: `z-ai/glm-5.3-flash` (cheap), `openai/gpt-5.6-luna` (cheap thanks to
+near-full prompt caching), `openai/gpt-5.6-sol` xhigh (expensive — the
+`smart` subagent). Rules that follow from the 08.09. incident, where one
+accumulating smart conversation (453 API calls, ~26 M tokens read) ate most
+of a monthly key limit:
+
+1. **Software implementation belongs on the dev box.** OpenCode there runs
+   on its own budget. Escalate into KaiL's own subagents only for
+   diagnosis, design, and verification — not for bulk implementation.
+   If OpenCode strands, diagnose the strand cause instead of routing
+   around it.
+2. **Fresh subagent per focused question.** Never resume one heavy subagent
+   across many phases; each resume re-reads the whole accumulated
+   transcript. Split by deliverable.
+3. **Cap heavy runs in the order:** name a tool-call/time budget and demand
+   an interim report when it is reached. After any smart run, report the
+   token totals to Martin (they are measurable locally from the run
+   transcripts).
+4. **402 from OpenRouter = the key's monthly limit.** Stop, tell Martin
+   with the key's limit-adjust URL, never retry around it.
