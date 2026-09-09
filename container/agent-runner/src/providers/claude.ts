@@ -550,7 +550,47 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
  * script. Defense-in-depth: if SDK_DISALLOWED_TOOLS slips through somehow,
  * block the call here instead of letting the agent hang.
  */
-const preToolUseHook: HookCallback = async (input) => {
+/**
+ * Subagent calls default to the background — filled in here, not requested in
+ * a prompt.
+ *
+ * A synchronous `Agent` call blocks the main thread until the subagent is done:
+ * its tool result *is* the finished report. While the main thread sits in that
+ * one tool call it makes no model call, so nothing can be shown to it — messages
+ * the poll loop pushes into the live query wait for the tool to return. Measured
+ * live on 2026-09-09: one `software-engineer` call held the thread for 39
+ * minutes and two user messages that arrived meanwhile surfaced only at the end,
+ * unanswered.
+ *
+ * `run_in_background: true` makes the tool return a launch receipt instead, and
+ * the subagent reports back through task notifications. Those notifications are
+ * also what keeps the container alive: each one is an event, every event touches
+ * the heartbeat, so the host's idle ceiling never mistakes a working agent for
+ * an idle one.
+ *
+ * Applied here rather than asked for in the prompt because instruction
+ * demonstrably does not hold — across 2026-09-08/09 the agent set the flag on 2
+ * of 14 calls.
+ *
+ * A default, not a cage: a call that states `run_in_background` either way is
+ * left untouched, so a deliberate foreground call remains possible for the rare
+ * order whose very next step needs the result. Only the unstated case — which
+ * is nearly all of them — is decided here. The matching rule in the group's
+ * standing instructions explains the intent to the agent; this hook is what
+ * makes the default hold when the model does not think about it.
+ */
+function forceBackgroundAgent(toolName: string, toolInput: Record<string, unknown> | undefined) {
+  if (toolName !== 'Agent') return undefined;
+  if (toolInput && 'run_in_background' in toolInput) return undefined;
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse' as const,
+      updatedInput: { ...(toolInput ?? {}), run_in_background: true },
+    },
+  };
+}
+
+export const preToolUseHook: HookCallback = async (input) => {
   const i = input as { tool_name?: string; tool_input?: Record<string, unknown> };
   const toolName = i.tool_name ?? '';
   if (SDK_DISALLOWED_TOOLS.includes(toolName)) {
@@ -568,6 +608,8 @@ const preToolUseHook: HookCallback = async (input) => {
   } catch (err) {
     log(`PreToolUse: failed to record container_state: ${err instanceof Error ? err.message : String(err)}`);
   }
+  const background = forceBackgroundAgent(toolName, i.tool_input);
+  if (background) return { continue: true, ...background } as unknown as ReturnType<HookCallback>;
   return { continue: true };
 };
 

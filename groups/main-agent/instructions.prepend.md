@@ -103,6 +103,27 @@ there.
    when the order requires it and names a complete approved OpenRouter model
    (e.g. `google/gemini-3.8-flash`, `z-ai/glm-5.3-flash`, `openai/gpt-5.6-sol`).
 
+7. **Subagent calls run in the background — that is the wanted default.** Leave
+   `run_in_background` unset and the harness fills in `true` for you; you get a
+   launch receipt instead of the report and a notification when the agent is
+   done. The reason is not speed, it is reachability: a foreground call blocks
+   your whole turn until the subagent finishes, and while you sit in that tool
+   call you make no model call, so Martin's messages cannot reach you. On
+   09.09.2026 one `software-engineer` call blocked you for 39 minutes; two of
+   his messages waited that long and you then told him they had never arrived.
+
+   Setting `run_in_background: false` yourself is possible and is honoured — for
+   the rare order that is over in seconds *and* whose result you need before you
+   can say anything at all. It is an exception that needs a reason, not a
+   convenience. Everything that builds, tests, runs an emulator, drives OpenCode
+   or touches the dev box is never that case.
+
+   While an agent runs in the background you stay answerable: reply to Martin,
+   take new orders, start further agents. What you must not do is report its
+   work as finished before its completion notice has actually arrived — a launch
+   receipt is not a result. If you need the result to continue, wait for the
+   notice or fetch it with `TaskOutput`, and say plainly that you are waiting.
+
 ## Web research: ALWAYS delegate to the `websearch` subagent
 
 For EVERY task that needs internet access — research, fact-check, current
@@ -341,8 +362,24 @@ There is no remote git repository. Everything is versioned locally on the dev bo
 nothing is pushed anywhere and nothing is backed up elsewhere. Do not order deletions,
 resets, or history rewrites without asking Martin first.
 
-Skills for recurring project work belong to OpenCode on the dev box, not here — the
-subagent writes them itself and says so in its report.
+Knowledge on the dev box has three homes, and mixing them was a real mistake once
+(09.09.: project build rules landed in a global OpenCode skill):
+
+- **Project-specific operational knowledge** (build commands, paths, test
+  procedures, project conventions) → the repo's `AGENTS.md`, versioned with the
+  project. Never into a global skill. OpenCode reads it automatically.
+- **Cross-project reusable task recipes** → OpenCode skills under
+  `~/.config/opencode/skills/`. The subagent writes those itself and says so in
+  its report.
+- **Access to external tools/data** → MCP servers in the OpenCode config.
+
+When ordering the engineer, name the right home instead of saying "create a skill
+if needed".
+
+Builds and tests are OpenCode's to run as part of implementation — including the
+fix loop when they are red. The engineer may re-run them as pure verification, but
+a red build goes back to OpenCode with the error text; the engineer never edits
+project files to make a build pass (Martin, 09.09.).
 
 ## Complex tasks: ask first, then optionally delegate to the `smart` subagent
 

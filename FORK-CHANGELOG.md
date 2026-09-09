@@ -11,6 +11,46 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-09 — subagent calls default to the background
+
+A synchronous `Agent` call blocks the main thread for as long as the subagent
+works: the tool result *is* the finished report, and while the thread sits in
+that one tool call it makes no model call at all. Nothing can be shown to it in
+the meantime — messages the poll loop pushes into the live query simply wait.
+Measured on this install: one `software-engineer` call held the main thread for
+39 minutes (last model call 12:47:31 UTC, next one 13:26:26), and two user
+messages that arrived at 12:47:43 and 13:02:36 reached the model only at the end
+of it, appended as "The user sent a new message while you were working" at
+position 66 of 67. They were never acted on, and the agent then told the user
+they had never arrived.
+
+`run_in_background: true` turns the call into a launch receipt; the subagent
+reports back through task notifications. Asking the model to set the flag does
+not work — across 2026-09-08/09 it passed it on 2 of 14 calls. So the existing
+`preToolUseHook` fills it in through the SDK's `updatedInput` whenever the call
+leaves it unstated, which is nearly always.
+
+A default, not a cage: a call that names `run_in_background` either way is left
+untouched, so a deliberate foreground call stays available for the rare order
+that finishes in seconds and whose result is needed before anything can be said.
+The group's standing instructions now carry the matching rule, so the agent
+knows the default is intended and what the exception costs — the hook only makes
+it hold when the model does not think about it.
+
+Two things this deliberately does not break. Background work still keeps the
+container alive, because every subagent step emits a task notification into the
+main stream (92 of them in one evening) and every event touches the heartbeat,
+so the host's 30-minute idle ceiling never mistakes a working agent for an idle
+one. And the agent can still wait when it must: `TaskOutput` and `TaskStop` are
+in the tool allowlist, and the verification run below used exactly that path.
+
+Verified live against the real CLI, not only in tests: a `coder` delegation sent
+through the CLI channel came back `Async agent launched successfully` although
+the model had not set the flag, followed by `<retrieval_status>success</...>`
+and the correct answer.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-09 — the `smart` subagent moves from muse-spark to gpt-5.6-sol
 
 Measured from the wire trace, 2026-09-08 cost $13.27 across 1,435 API calls

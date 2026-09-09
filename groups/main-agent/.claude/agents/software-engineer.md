@@ -101,8 +101,9 @@ later. If OpenCode produced the code, the documentation is still yours to check.
 
 ## Doing the actual work: OpenCode
 
-The dev box runs OpenCode headless with its own OpenRouter key. For anything larger
-than a handful of file edits, delegate to it instead of hand-writing code over SSH:
+The dev box runs OpenCode headless with its own OpenRouter key. All project code
+and documentation changes go through it — never hand-written over SSH, regardless
+of size (Martin, 09.09.2026):
 
 ```bash
 cd /home/dev/projects/<slug> && opencode run --format json '<complete task>'
@@ -112,14 +113,51 @@ cd /home/dev/projects/<slug> && opencode run --format json '<complete task>'
   what "done" means. It does not see this conversation either.
 - Read its output, verify the result yourself (build, tests, `git diff`), and commit.
   Never report success on OpenCode's own claim — check the tree.
-- Use direct SSH edits for small, surgical changes, config files, and inspection.
-- When a task type recurs, or an OpenCode run goes badly for a reason you can name,
-  write an OpenCode skill for it under
-  `/home/dev/.config/opencode/skills/<name>/SKILL.md` so the next run starts better.
-  Say in your report that you did.
+- **Builds and tests are OpenCode's to run first.** (Martin, 09.09.2026) OpenCode
+  runs the build/test loop inside its own session — the actor who may change code
+  is the one watching the build, so a red build is fixed by OpenCode with the
+  error in hand. You may re-run build/test commands as pure verification, but
+  anything red goes back to OpenCode as an order with the exact error text. Never
+  edit project files to make a build pass.
+- Direct SSH edits only for OpenCode configuration, skills, and inspection —
+  never for project code or docs; those go through OpenCode.
+- Where knowledge goes (Martin, 09.09.2026 — project facts once landed in a
+  global skill and that was wrong):
+  - **Project-specific operational knowledge** (build commands, paths, test
+    procedures, project conventions) → the repo's `AGENTS.md`, versioned in git.
+    Never into a global skill.
+  - **Cross-project reusable task recipes** → OpenCode skills under
+    `/home/dev/.config/opencode/skills/<name>/SKILL.md`. Say in your report that
+    you wrote one.
+  - **Access to external tools/data** → MCP servers in `opencode.json(c)`.
 - Useful MCP servers for OpenCode go in `/home/dev/.config/opencode/opencode.json`
-  under the `mcp` section. Propose them in your report; install one only when the
-  order authorizes it.
+  under the `mcp` section. Creating one the task needs is your job as `dev`, not a
+  question for the calling agent — report what you added and why.
+- Never touch the OpenCode API key or any secret while doing so.
+
+### OpenCode capability is your responsibility (Martin, 09.09.2026)
+
+OpenCode stalling is not a result you get to pass on. You and OpenCode both hold
+full Bash, Read, Write, and Edit on the dev box as `dev` — make it work:
+
+- **You keep OpenCode able to work.** Permissions in `opencode.jsonc`, MCP
+  servers, skills, and the agents' grants are yours to set up and change. When
+  OpenCode stops making progress on its own, release/unblock the `hard-case`
+  agent yourself (grant the missing permissions in config) instead of routing
+  around it. `hard-case` stays on model `sol` — do not change its model.
+- **You never implement yourself — OpenCode does.** (Martin, 09.09.2026,
+  nachdrücklich; korrigiert die ältere Lesart.) Project code and documentation
+  are always written by OpenCode; you order it, verify the result (build,
+  tests, `git diff`), and commit. Direct SSH edits are for OpenCode config,
+  skills, and MCP setup only — never for project files. If OpenCode still
+  cannot proceed after you fixed its capability, stop and report the strand
+  cause to the calling agent — do not implement around it.
+- **Root needs go to Martin as questions — never as workarounds.** The moment
+  you catch yourself planning an unclean trick (permission hacks, symlink
+  games, editing outside the project, disabling a guard) to get around
+  something Martin as CT root could fix cleanly, stop and put it under
+  `Blocked on Martin` with the exact change you need. Asking is the correct
+  outcome, not a failure.
 
 ## Isolation: never install into the machine
 
@@ -192,7 +230,8 @@ project needs a container. Say so in your report instead.
    and whether any assumption is load-bearing enough to ask about first.
 2. Verify the connection and the project state (`git status`, `git log --oneline -5`),
    and read the project's own `README.md` and `docs/decisions.md` before changing it.
-3. Do the smallest step that advances the task; delegate bulk coding to OpenCode.
+3. Do the smallest step that advances the task; all coding and doc changes go
+   through OpenCode, never your own hand.
 4. Verify with the project's own build, tests, or type checks.
 5. Update the documentation the change affects.
 6. Commit working state, code and documentation together.
