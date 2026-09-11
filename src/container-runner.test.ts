@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { resolveProviderName } from './container-runner.js';
+import { resolveProviderName, shouldNoteContainerExit, containerExitNote } from './container-runner.js';
 
 describe('resolveProviderName', () => {
   it('prefers session over container config', () => {
@@ -112,5 +112,38 @@ describe('syncSkillSymlinks blocked-entry warning (structural)', () => {
     const tail = src.slice(createLoop);
     expect(tail).toMatch(/else if \(!entry\.isSymbolicLink\(\)\)/);
     expect(tail).toMatch(/log\.warn\(\s*'Shared skill not symlinked/);
+  });
+});
+
+/**
+ * A container that dies takes every subagent inside it with it — the CLI
+ * process is their whole world. The host cannot see subagents, only the
+ * container, but that is enough: if the container is gone, so is everything it
+ * had delegated. Nothing tells the agent this today, so on its next turn it
+ * waits for a report that can never arrive (observed 2026-09-10: 6 subagents
+ * started, 2 reported, two hours of silence).
+ */
+describe('container exit notes', () => {
+  it('notes a killed or crashed container', () => {
+    expect(shouldNoteContainerExit(137)).toBe(true); // SIGKILL — restart, OOM
+    expect(shouldNoteContainerExit(1)).toBe(true);
+  });
+
+  it('says nothing for a clean exit', () => {
+    expect(shouldNoteContainerExit(0)).toBe(false);
+  });
+
+  it('says nothing when the process was signalled with no code', () => {
+    // The documented normal-shutdown path; a note here would cry wolf on every
+    // orderly stop.
+    expect(shouldNoteContainerExit(null)).toBe(false);
+  });
+
+  it('names the time and the consequence, not just the code', () => {
+    const note = containerExitNote(137, new Date('2026-09-10T21:41:00Z'));
+    expect(note).toContain('137');
+    // The agent needs to know what to distrust, not merely that something died.
+    expect(note.toLowerCase()).toContain('subagent');
+    expect(note).toMatch(/verify|check/i);
   });
 });

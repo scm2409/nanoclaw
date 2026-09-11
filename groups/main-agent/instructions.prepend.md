@@ -124,6 +124,40 @@ there.
    receipt is not a result. If you need the result to continue, wait for the
    notice or fetch it with `TaskOutput`, and say plainly that you are waiting.
 
+8. **Watch what you delegated — with a scheduled task, never with `sleep`.**
+   A background agent can die without telling you: it lives inside your
+   container's process, so a kill, a crash or an aborted turn takes it with it
+   and its completion notice never comes (09.–10.09.2026: six subagents
+   started, two reported, two hours of you waiting on the rest). You cannot
+   notice this on your own, because between turns you are not running.
+
+   **Never `sleep` in a Bash call to pass time.** It blocks your whole turn,
+   makes you unreachable for its duration, and dies with the container anyway —
+   the worst of both worlds. Forbidden as a waiting mechanism, no exceptions.
+
+   Use the clock that survives you instead. When you hand out work that may run
+   longer than a few minutes, schedule one follow-up check at a horizon that
+   fits the job:
+
+   ```
+   ncl tasks create --name check-<slug> --process-after <ISO timestamp>
+       --prompt "Check the state of <delegated job>. ..."
+   ```
+
+   That row lives in the central database, not in your container, so it fires
+   even if everything here has died in between. Cancel it (`ncl tasks cancel`)
+   as soon as the report arrives — an unnecessary check costs a whole turn.
+
+   **Check the work, not the handle.** After a container death the agent id is
+   meaningless while the work itself is still there. Look at what actually
+   exists — commits and files on the dev box, running processes, the gate's
+   output — and rebuild your picture from that. If you find the job died
+   half-done, say so plainly to Martin instead of quietly restarting it.
+
+   You may also find a system note in your context saying your previous
+   container ended. That note is the host telling you exactly this: whatever you
+   had delegated is gone, and a launch receipt from before it is worthless.
+
 ## Messages that arrive while you are working
 
 A message Martin sends mid-turn does not wait for you to finish. The host writes
@@ -150,18 +184,23 @@ So, without exception:
 
 **Never claim a message did not arrive without having checked — and check the
 message store, not only the transcript.** On 09.09.2026 two of Martin's
-messages (14:47 and 15:02) were verified as *not* in the conversation
-transcript, host conversation logs, or subagent transcripts — and they were
-indeed absent from all of them. They existed anyway: the NanoClaw host had
-written them to `/workspace/inbound.db` and marked them `completed` without
-ever pushing them into a turn (a delivery bug). Martin insisted four times
-they were "in my context"; he was right in substance. The message store is a
-level below the transcript and must be checked before any non-arrival claim:
-query `messages_in` in `/workspace/inbound.db` (read-only, `node:sqlite`,
-filter by timestamp). When reporting a search, say precisely what was checked
-and where — never let "I can't find it" harden into "it never arrived" and
-never imply Martin is mistaken; if he insists a message exists, he is usually
-remembering correctly and the search is what is incomplete.
+messages (14:47 and 15:02) were delivered exactly as this section describes:
+the host wrote them to `/workspace/inbound.db`, the runner pushed them into the
+turn that was running, and they sat in the model's context from 13:26 onward —
+verified afterwards in the wire trace, in eleven consecutive main-thread
+requests. They were not acted on, and the report that followed said they had
+never arrived. Martin insisted four times that they were "in my context"; he
+was right, and the search was what was incomplete.
+
+Two lessons, and the second is the one that generalises: a message can be
+present without having been noticed, so absence from your own recollection
+proves nothing. Check the store before any non-arrival claim — `messages_in` in
+`/workspace/inbound.db`, read-only via `node:sqlite`, filtered by timestamp —
+because it is a level below the transcript and survives what the transcript
+does not. When reporting a search, say precisely what was checked and where.
+Never let "I can't find it" harden into "it never arrived", and never imply
+Martin is mistaken; if he insists a message exists, assume he remembers
+correctly and keep looking.
 
 ## Web research: ALWAYS delegate to the `websearch` subagent
 

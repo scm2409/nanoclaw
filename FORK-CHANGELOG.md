@@ -11,6 +11,42 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-11 — the agent learns when its container took its subagents down
+
+A subagent lives inside the CLI process inside the container, so a kill, a crash
+or an aborted turn takes it along. From the next turn this is invisible: the
+resumed session still shows an agent that was "launched successfully" and simply
+never reported. Observed across 09.–10.09: six subagents started, two reported,
+then two hours of an agent waiting for a notice that could not arrive — and an
+orphaned `opencode run` finishing its work on the dev box with nobody left to
+collect it.
+
+The host cannot see subagents, only containers, but that is enough: if the
+container is gone, everything it had delegated is gone. On a non-zero exit it
+now writes a system note into the session's inbound DB naming the time, the exit
+code, and what to distrust — a launch receipt from before the death is
+worthless, so verify delegated work where it actually lives (files, git history,
+running processes) rather than from a handle. `code === null`, the documented
+orderly-signal path, stays silent so the note cannot cry wolf on every clean
+stop.
+
+The note carries `trigger = 0` on purpose. Waking a container to tell it that a
+container died would spawn one just to read its own obituary, and would fight a
+crash loop rather than report it; as context it rides along with the next real
+message instead. Verified live: killing a container produced the note in
+`inbound.db` with the install-timezone timestamp and left it pending, waking
+nobody.
+
+The instructions gain the other half, which the host cannot supply: when work is
+delegated that may run for more than a few minutes, schedule one follow-up check
+with `ncl tasks create --process-after`, because that row lives in the central
+database and fires even when everything in the container has died. And a
+blocking `sleep` in a Bash call is now forbidden as a waiting mechanism — the
+agent had invented it on its own, which costs its reachability for the duration
+and dies with the container anyway.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-10 — a dropped stream resumes the turn instead of killing it
 
 Seven times in one day the gateway ended a streamed answer with

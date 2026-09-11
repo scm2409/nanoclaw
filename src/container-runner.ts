@@ -49,8 +49,10 @@ import {
   markContainerRunning,
   markContainerStopped,
   sessionDir,
+  writeSessionMessage,
   writeSessionRouting,
 } from './session-manager.js';
+import { formatLocalTime } from './timezone.js';
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
@@ -206,6 +208,30 @@ async function spawnContainer(session: Session): Promise<void> {
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     containerLog?.close(`exited code=${code}`);
+    if (shouldNoteContainerExit(code)) {
+      // trigger 0: this must not wake anyone by itself. It is context for the
+      // next real turn, whenever that comes — waking a container to tell it
+      // that a container died would spawn one just to read its own obituary,
+      // and would fight a crash loop rather than report it.
+      try {
+        writeSessionMessage(session.agent_group_id, session.id, {
+          id: `exit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          kind: 'chat',
+          timestamp: new Date().toISOString(),
+          platformId: session.agent_group_id,
+          channelType: 'agent',
+          threadId: null,
+          content: JSON.stringify({
+            text: containerExitNote(code as number, new Date()),
+            sender: 'system',
+            senderId: 'system',
+          }),
+          trigger: 0,
+        });
+      } catch (err) {
+        log.warn('Could not write container-exit note', { sessionId: session.id, err });
+      }
+    }
     // code null = killed by signal (normal shutdown path), not a boot failure.
     // The tail is a preview; `logPath` points at the whole thing.
     if (code !== 0 && code !== null && stderrTail.length > 0) {
@@ -228,6 +254,38 @@ async function spawnContainer(session: Session): Promise<void> {
     containerLog?.close(`spawn error: ${String(err)}`);
     log.error('Container spawn error', { sessionId: session.id, err });
   });
+}
+
+/**
+ * Should a container's exit leave a note for the agent's next turn?
+ *
+ * The host cannot see subagents — they live inside the CLI process inside the
+ * container — but it does not need to: if the container is gone, everything it
+ * had delegated is gone with it. That is invisible from inside the next turn,
+ * where a resumed session still shows an agent that was "launched
+ * successfully" and never reported. Observed 2026-09-10: 6 subagents started,
+ * 2 reported back, then two hours of an agent waiting for a notice that could
+ * not arrive.
+ *
+ * `code === null` means the process was signalled without an exit code, which
+ * the close handler below documents as the orderly path — noting that would cry
+ * wolf on every clean stop. A numeric non-zero is a kill (137 for SIGKILL: an
+ * operator restart, an OOM) or a crash, and both are worth saying out loud.
+ */
+export function shouldNoteContainerExit(code: number | null): boolean {
+  return code !== null && code !== 0;
+}
+
+/** What the next turn is told about the container it did not survive. */
+export function containerExitNote(code: number, at: Date): string {
+  return [
+    `System note: your previous container ended at ${formatLocalTime(at.toISOString(), TIMEZONE)} (exit code ${code}).`,
+    'Any subagent you had running was inside that process and died with it — including background ones,',
+    'whose completion notice can never arrive now, however long you wait.',
+    'Before continuing, verify the real state of any delegated work where it actually lives',
+    '(files, git history, running processes on the target machine) rather than trusting a launch receipt,',
+    'and tell Martin what you found if it changes anything he was told earlier.',
+  ].join(' ');
 }
 
 /** Kill a container for a session. */
