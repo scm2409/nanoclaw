@@ -15,6 +15,49 @@ vi.mock('../../config.js', async () => {
 });
 
 import { setTypingAdapter, startTypingRefresh, stopTypingRefresh } from './index.js';
+import fs from 'fs';
+import path from 'path';
+import Database from 'better-sqlite3';
+
+const DATA_DIR = '/tmp/nanoclaw-test-typing';
+
+/**
+ * Lay down a session directory the way the host does: a heartbeat file with a
+ * chosen age, and an outbound.db carrying the container's tool-in-flight row.
+ */
+function seedSession(
+  agentGroupId: string,
+  sessionId: string,
+  opts: { heartbeatAgeMs: number; tool?: { name: string; startedAgoMs: number; declaredTimeoutMs?: number | null } },
+) {
+  const dir = path.join(DATA_DIR, 'v2-sessions', agentGroupId, sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  const hb = path.join(dir, '.heartbeat');
+  fs.writeFileSync(hb, '');
+  const t = Date.now() - opts.heartbeatAgeMs;
+  fs.utimesSync(hb, t / 1000, t / 1000);
+
+  const db = new Database(path.join(dir, 'outbound.db'));
+  db.exec(`CREATE TABLE IF NOT EXISTS container_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    current_tool TEXT,
+    tool_declared_timeout_ms INTEGER,
+    tool_started_at TEXT,
+    updated_at TEXT NOT NULL
+  )`);
+  db.prepare('DELETE FROM container_state').run();
+  if (opts.tool) {
+    db.prepare(
+      'INSERT INTO container_state (id, current_tool, tool_declared_timeout_ms, tool_started_at, updated_at) VALUES (1, ?, ?, ?, ?)',
+    ).run(
+      opts.tool.name,
+      opts.tool.declaredTimeoutMs ?? null,
+      new Date(Date.now() - opts.tool.startedAgoMs).toISOString(),
+      new Date().toISOString(),
+    );
+  }
+  db.close();
+}
 
 type Call = { channelType: string; platformId: string; threadId: string | null; instance?: string };
 
@@ -119,5 +162,65 @@ describe('startTypingRefresh — instance forwarding', () => {
         instance: 'telegram',
       });
     }
+  });
+});
+
+/**
+ * A tool call is work the user should see. The heartbeat only ticks on SDK
+ * events, so a container sitting in one long Bash call looks idle to the
+ * heartbeat alone — that is the second half of the dark-typing-indicator
+ * problem (the first half being model calls, fixed by partial messages in the
+ * container). The tool-in-flight row already exists for the host sweep; this
+ * reads it for the indicator too.
+ */
+describe('startTypingRefresh — a tool in flight counts as working', () => {
+  /** Get past the 15s grace window, where ticks fire unconditionally. */
+  async function pastGrace() {
+    await vi.advanceTimersByTimeAsync(16_000);
+  }
+
+  it('keeps typing while a tool runs, even with a stale heartbeat', async () => {
+    seedSession('ag-t', 'sess-tool', {
+      heartbeatAgeMs: 120_000,
+      tool: { name: 'Bash', startedAgoMs: 60_000, declaredTimeoutMs: 600_000 },
+    });
+    const calls = captureAdapter();
+    startTypingRefresh('sess-tool', 'ag-t', 'matrix', 'matrix:!r', null);
+    await pastGrace();
+    calls.length = 0;
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    stopTypingRefresh('sess-tool');
+  });
+
+  it('stops when neither heartbeat nor tool says anything is happening', async () => {
+    seedSession('ag-t', 'sess-idle', { heartbeatAgeMs: 120_000 });
+    const calls = captureAdapter();
+    startTypingRefresh('sess-idle', 'ag-t', 'matrix', 'matrix:!r', null);
+    await pastGrace();
+    calls.length = 0;
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(calls).toHaveLength(0);
+    stopTypingRefresh('sess-idle');
+  });
+
+  it('ignores a tool row left behind by a dead container', async () => {
+    // Nothing clears this row when a container is killed mid-tool, so an
+    // unbounded read would show "typing" forever. The declared timeout is the
+    // bound the agent itself named.
+    seedSession('ag-t', 'sess-stale', {
+      heartbeatAgeMs: 120_000,
+      tool: { name: 'Bash', startedAgoMs: 3_600_000, declaredTimeoutMs: 60_000 },
+    });
+    const calls = captureAdapter();
+    startTypingRefresh('sess-stale', 'ag-t', 'matrix', 'matrix:!r', null);
+    await pastGrace();
+    calls.length = 0;
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(calls).toHaveLength(0);
+    stopTypingRefresh('sess-stale');
   });
 });

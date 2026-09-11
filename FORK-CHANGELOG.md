@@ -11,6 +11,59 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-10 — a dropped stream resumes the turn instead of killing it
+
+Seven times in one day the gateway ended a streamed answer with
+`{"type":"error","error":{"type":"api_error","message":"Network connection
+lost.","error_type":"provider_unavailable"}}` — the upstream provider hung up
+mid-answer, after up to 917 seconds of streaming, on a model currently served by
+a single pinned provider. What followed was worse than the drop itself: the CLI
+renders it as an error result, the poll loop sees the same text twice and
+reaches for its anti-spam guard, and `query.abort()` takes the whole CLI process
+down. In that container 6 subagents had been started, 5 of them in the
+background, and only 2 ever reported — three were killed mid-work with no notice
+to anyone, which from the user's side looked like an agent that had simply
+stopped for two hours.
+
+The provider now gets one more chance: the turn resumes on the same session, so
+the transcript and everything the dropped attempt already did carry over, and
+only the connection is new. The pin is kept, because nothing is wrong with the
+routing. One retry only — a provider that drops twice in a row is down rather
+than unlucky, and the poll loop's guard should get its turn then.
+
+The budget is separate from the unpinned retry added on 09-08: a stale pin and a
+flaky provider are different faults, and surviving one must not spend the other's
+single attempt.
+
+vibecoded with Claude Opus 5
+
+## 2026-09-10 — the typing indicator follows the work again
+
+The indicator is driven by the heartbeat file, and `touchHeartbeat()` runs once
+per SDK message. Two kinds of work emit no messages at all while they last, so
+both looked exactly like an idle container: a model call, and a tool call.
+Measured on a real turn — 62 seconds of thinking without a single heartbeat
+touch, so the indicator went dark after the module's 15-second grace window
+while the agent was working the whole time. From the phone that is
+indistinguishable from an agent that has stopped.
+
+Two changes, one per gap. The container now passes `includePartialMessages: true`,
+so streaming deltas arrive as SDK messages and the heartbeat ticks throughout a
+long answer. It is the same stream in finer pieces: no extra request, no extra
+tokens. And the typing module now also treats a tool in flight as work, reading
+the `container_state` row the PreToolUse hook already writes and the host sweep
+already consumes — bounded by the timeout the call itself declared, because
+nothing clears that row when a container is killed mid-tool and an unbounded
+read would show a typing indicator for a container that no longer exists.
+
+Verified against a real turn after the change: the heartbeat stayed fresh from
+the first sample to the moment the answer was delivered, and went stale only
+afterwards. Nothing new is sent to the chat platform — `m.typing` on Matrix is
+the same standard event as before, so any client, including a self-built one,
+picks it up without changes.
+
+vibecoded with Claude Opus 5
+
 ## 2026-09-09 — standing rule for messages that arrive mid-turn
 
 The runner pushes a message that lands during a running turn straight into it,

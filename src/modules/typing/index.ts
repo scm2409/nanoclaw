@@ -19,7 +19,8 @@
  */
 import fs from 'fs';
 
-import { heartbeatPath } from '../../session-manager.js';
+import { getContainerState } from '../../db/session-db.js';
+import { heartbeatPath, openOutboundDb } from '../../session-manager.js';
 
 const TYPING_REFRESH_MS = 4000;
 /**
@@ -97,6 +98,46 @@ function isHeartbeatFresh(agentGroupId: string, sessionId: string): boolean {
   }
 }
 
+/**
+ * Fallback bound for a tool that declared no timeout of its own. Long enough
+ * to cover an ordinary command, short enough that a row left behind by a
+ * killed container stops claiming the agent is busy within the hour.
+ */
+const TOOL_UNDECLARED_MAX_MS = 15 * 60 * 1000;
+
+/**
+ * Is a tool call in flight right now?
+ *
+ * The heartbeat only ticks on SDK events, and a tool call produces none until
+ * it returns — so a container sitting in one long command is indistinguishable
+ * from an idle one by heartbeat alone. `container_state` already carries what
+ * is missing: the hook writes the tool name and start time on every call and
+ * clears them when it returns. The host sweep reads this to widen its
+ * stuck-detection tolerance; the indicator reads it for the same reason.
+ *
+ * Bounded by the timeout the call itself declared, because nothing clears the
+ * row when a container is killed mid-tool. An unbounded read would leave the
+ * user looking at a typing indicator for a container that no longer exists.
+ */
+function isToolInFlight(agentGroupId: string, sessionId: string): boolean {
+  try {
+    const state = getContainerState(openOutboundDb(agentGroupId, sessionId));
+    if (!state?.current_tool || !state.tool_started_at) return false;
+    const startedMs = Date.parse(state.tool_started_at);
+    if (!Number.isFinite(startedMs)) return false;
+    const bound = state.tool_declared_timeout_ms ?? TOOL_UNDECLARED_MAX_MS;
+    return Date.now() - startedMs < bound;
+  } catch {
+    // No outbound DB yet, or no container_state table on an older session.
+    return false;
+  }
+}
+
+/** Anything that means "the agent is doing something the user should see". */
+function isWorking(agentGroupId: string, sessionId: string): boolean {
+  return isHeartbeatFresh(agentGroupId, sessionId) || isToolInFlight(agentGroupId, sessionId);
+}
+
 export function startTypingRefresh(
   sessionId: string,
   agentGroupId: string,
@@ -141,12 +182,12 @@ export function startTypingRefresh(
     if (entry.pausedUntil > Date.now()) return;
 
     const withinGrace = Date.now() - entry.startedAt < TYPING_GRACE_MS;
-    if (withinGrace || isHeartbeatFresh(entry.agentGroupId, sessionId)) {
+    if (withinGrace || isWorking(entry.agentGroupId, sessionId)) {
       triggerTyping(entry.channelType, entry.platformId, entry.threadId, entry.instance).catch(() => {});
       return;
     }
 
-    // Out of grace AND heartbeat stale — agent is idle, stop refreshing.
+    // Out of grace, heartbeat stale, no tool running — idle, stop refreshing.
     clearInterval(entry.interval);
     typingRefreshers.delete(sessionId);
   }, TYPING_REFRESH_MS);

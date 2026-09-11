@@ -254,6 +254,24 @@ export function providerPinEnv(
 const PROVIDER_ROUTING_ERROR_RE = /issue with the selected model|no allowed providers are available/i;
 
 /**
+ * A turn the upstream provider hung up on mid-answer.
+ *
+ * The gateway reports it inside the stream —
+ * `{"type":"error","error":{"type":"api_error","message":"Network connection
+ * lost.","error_type":"provider_unavailable"}}` — and the CLI renders it as
+ * "API Error: Network connection lost.". Measured 2026-09-10: seven times in
+ * one day, on streamed answers running up to 917 seconds, all on a model served
+ * by a single pinned provider.
+ *
+ * Nothing is wrong with the request, so the retry keeps the pin and only opens
+ * a new connection on the same session. Left alone, the poll loop sees the same
+ * error twice and aborts the query to stop it re-delivering — which kills the
+ * CLI process and every background subagent inside it (6 started, 2 reported,
+ * on the day this was measured).
+ */
+const PROVIDER_DROPPED_STREAM_RE = /network connection lost|provider_unavailable/i;
+
+/**
  * The message of a failed turn, or null for anything else.
  *
  * Mirrors the translator's own extraction: `result` carries the text on
@@ -952,6 +970,13 @@ export class ClaudeProvider implements AgentProvider {
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,
+        // Streaming deltas are what keep the heartbeat ticking during a long
+        // answer, and the heartbeat is what the host's typing indicator reads.
+        // Without them the SDK stays silent from request to finished block, so
+        // a minute of thinking is indistinguishable from an idle container
+        // (measured 2026-09-10: 62 seconds without a single heartbeat touch).
+        // Same stream, finer pieces — no extra request, no extra tokens.
+        includePartialMessages: true,
         allowedTools: [...TOOL_ALLOWLIST, ...Object.keys(this.mcpServers).map(mcpAllowPattern)],
         disallowedTools: SDK_DISALLOWED_TOOLS,
         agents: fileSubagents,
@@ -998,6 +1023,7 @@ export class ClaudeProvider implements AgentProvider {
      */
     async function* sdkMessages(): AsyncGenerator<SDKMessage> {
       let pinRetried = false;
+      let dropRetried = false;
       let sessionId = input.continuation;
       while (true) {
         let restart = false;
@@ -1017,6 +1043,19 @@ export class ClaudeProvider implements AgentProvider {
               restart = true;
               break;
             }
+          }
+
+          // Separate budget from the pin retry above: a stale pin and a
+          // provider that hangs up are different faults, and surviving one
+          // must not spend the other's single attempt.
+          if (failure && !dropRetried && PROVIDER_DROPPED_STREAM_RE.test(failure)) {
+            dropRetried = true;
+            log(`Provider dropped the stream — resuming turn once: ${failure.slice(0, 160)}`);
+            stream = new MessageStream();
+            stream.push(input.prompt);
+            sdkResult = startSdk(stream, attemptEnv, sessionId);
+            restart = true;
+            break;
           }
 
           yield message;
