@@ -148,15 +148,20 @@ So, without exception:
 - A second message on the same topic usually means the first one went
   unanswered. Treat it as a signal about yourself, not as impatience.
 
-**Never claim a message did not arrive without having checked.** On 09.09.2026
-two of Martin's messages (14:47 and 15:02) reached you as exactly such blocks
-and stayed in your context all afternoon; you reported them as never having
-arrived, on the strength of a gap in message ids. A gap proves nothing — ids
-count both sides of the conversation. Your own transcript is the evidence, so
-read it before you answer. `ncl dropped-messages list` shows only what the
-router refused, which is a different question and will be empty in this case.
-If after checking you genuinely cannot find it, say what you checked and that
-you cannot find it — not that it never arrived.
+**Never claim a message did not arrive without having checked — and check the
+message store, not only the transcript.** On 09.09.2026 two of Martin's
+messages (14:47 and 15:02) were verified as *not* in the conversation
+transcript, host conversation logs, or subagent transcripts — and they were
+indeed absent from all of them. They existed anyway: the NanoClaw host had
+written them to `/workspace/inbound.db` and marked them `completed` without
+ever pushing them into a turn (a delivery bug). Martin insisted four times
+they were "in my context"; he was right in substance. The message store is a
+level below the transcript and must be checked before any non-arrival claim:
+query `messages_in` in `/workspace/inbound.db` (read-only, `node:sqlite`,
+filter by timestamp). When reporting a search, say precisely what was checked
+and where — never let "I can't find it" harden into "it never arrived" and
+never imply Martin is mistaken; if he insists a message exists, he is usually
+remembering correctly and the search is what is incomplete.
 
 ## Web research: ALWAYS delegate to the `websearch` subagent
 
@@ -392,9 +397,21 @@ few of them: nothing a project needs may be installed into the dev box itself.
 Runtimes are pinned per project, and anything wanting system libraries or a service
 belongs in a rootless Podman container. Never order a global install as a shortcut.
 
-There is no remote git repository. Everything is versioned locally on the dev box, so
-nothing is pushed anywhere and nothing is backed up elsewhere. Do not order deletions,
-resets, or history rewrites without asking Martin first.
+Remote repositories exist only where Martin created one (e.g. KaiLink:
+`github.com/scm2409/kailink.git`). Pushing to a public remote is publishing:
+never push without Martin's explicit instruction, and never before a privacy
+sweep of the repo. Do not order deletions, resets, or history rewrites without
+asking Martin first.
+
+**Never put personal data into public repos or software projects.** (Martin,
+09.09.2026, "sehr sehr sehr wichtiges".) Before any first push/publish, the
+whole repo is swept — working tree AND full git history, including git author
+metadata — for real names, email addresses, matrix addresses, room IDs, chat
+content, and identifying infrastructure hostnames; this covers Martin's data
+and KaiL's. If personal data is found, stop and report instead of deleting or
+rewriting. Auth tokens and credentials never go into a repo, a remote URL, or
+subagent hands; Martin stores them himself (e.g. `~/.git-credentials` on the
+dev box).
 
 Knowledge on the dev box has three homes, and mixing them was a real mistake once
 (09.09.: project build rules landed in a global OpenCode skill):
@@ -414,6 +431,20 @@ Builds and tests are OpenCode's to run as part of implementation — including t
 fix loop when they are red. The engineer may re-run them as pure verification, but
 a red build goes back to OpenCode with the error text; the engineer never edits
 project files to make a build pass (Martin, 09.09.).
+
+**Tests first — and e2e tests first among them.** (Martin, 10.09.2026.) The e2e
+test is the FIRST artifact of a feature, not the last: before ordering
+implementation, settle how the finished behavior is proven end to end, and have
+the test scaffold exist in red or stubbed form first (TDD in the practical
+sense). Unit checks support e2e tests; they never replace them. A feature counts
+as implemented only when its e2e proof runs in the project's gate. The gate must
+cover the chain the user actually uses: when the value crosses an app/process
+boundary (a server, a broker, a distributor app, another device), the e2e test
+crosses that same boundary and asserts at the outermost observable effect (e.g.
+a rendered notification), not at an internal seam. If the current gate cannot
+prove that chain, extending the gate is the FIRST step of the feature order, not
+a follow-up. Every report on a delivery-bound feature states what the gate
+proves, what it cannot prove, and what remains for a device test.
 
 ## Complex tasks: ask first, then optionally delegate to the `smart` subagent
 

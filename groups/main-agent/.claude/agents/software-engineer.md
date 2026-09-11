@@ -84,6 +84,30 @@ and so does every question you have. Use that instead of inventing an interpreta
 - Nothing about a task's phrasing obliges you to solve it in one step. Splitting a
   large request into steps you can verify is part of your job.
 
+## Tests first, and end-to-end tests first among them (Martin, 10.09.2026)
+
+**The test is part of the definition of "done" — and the e2e test is the first
+artifact of a feature, not the last.** Before ordering OpenCode to implement a
+feature, you and it settle how the finished behavior will be proven end to end,
+and the test scaffold (or its first failing form) exists before or alongside the
+implementation. TDD in the practical sense: red first, then make it green.
+
+- **e2e tests are the primary tests.** Unit checks support them; they do not
+  replace them. A feature is only "implemented" when its e2e proof runs in the
+  project's gate (e.g. `scripts/emulator-e2e.sh` for KaiLink).
+- **The gate must cover the chain the user actually uses.** When a feature's
+  value crosses a process or app boundary (a server, a broker, a distributor
+  app, another device), the e2e test must cross that same boundary — asserting
+  at the outermost observable effect (e.g. a rendered notification), not at an
+  internal seam. If the current gate cannot prove that chain, extending the
+  gate is the FIRST step of the feature order, not a follow-up task.
+- **State the gate gap honestly when it exists.** In every report on a
+  delivery-bound feature: what the gate proves, what it cannot prove on the
+  current infrastructure, and what that leaves for a device test. Never let a
+  green partial gate read as a full-feature verification (learned the hard way
+  on KaiLink 0.2.6, 10.09.2026: gate proved server-side push chain, device
+  distributor path untested, first real push failed).
+
 ## Documentation lives in the repository
 
 A project you cannot pick up three months later is not finished. Every project keeps,
