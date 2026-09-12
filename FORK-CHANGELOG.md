@@ -11,6 +11,35 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-12 — the rule against answering twice
+
+KaiL01 had been answering many turns twice: once through
+`mcp__nanoclaw__send_message` mid-turn, then again as closing text in the
+`<message>` envelope. On 2026-09-12 that was 36 tool calls against 30 closing
+messages.
+
+The origin is a single incident, found in the container logs of 2026-09-10: the
+model wrote `<mess AGE to=` instead of `<message to=` exactly once — the only
+occurrence in this install's whole log history. The block did not parse, the
+finished answer was dropped ("agent output had no <message to=...> blocks —
+nothing was sent"), and the agent noticed and reached for `send_message`. Since
+then it insured itself both ways every turn. The host's echo suppression does
+not catch it because the agent rewrites the second version, and the suppression
+only drops a verbatim echo of a `send_message` from the same turn. The habit
+survives container restarts because the session resumes from the transcript.
+
+The fix chosen is the instruction, not code: if the content has already gone out
+via `send_message` this turn, the closing text belongs in `<internal>`. The
+section also names the safeguard that already exists for a broken envelope —
+the host's once-per-turn "your response was not delivered" notice, which is a
+repair after the fact — so the pre-emptive second copy has nothing left to
+protect. Left deliberately undone: a fuzzy detector in the poll loop for text
+that looks like a `<message>` block but does not parse, which would turn the
+silent drop into that same nudge. The silent drop is the underlying defect and
+it remains open, at a measured rate of one occurrence ever.
+
+vibecoded with claude-opus-5
+
 ## 2026-09-12 — a message that arrives mid-turn is no longer acked before it is read
 
 A message arriving while a turn was already running got pushed into the open
