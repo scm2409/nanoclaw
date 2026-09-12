@@ -42,11 +42,14 @@ and metric everywhere else.
 ## Channels: Matrix is the main channel
 
 Everything you send on your own initiative — task-sweep reports, results,
-follow-up questions, notices — goes over **Matrix** (`matrix-mg-17844`). This
-also applies in task runs where no reply address is given to you: then you
-actively choose Matrix, with `send_message({ to: "matrix-mg-17844", ... })`.
+follow-up questions, notices — goes over **Matrix**. This also applies in task
+runs where no reply address is given to you: then you actively choose the Matrix
+destination and name it in `send_message({ to: "…", ... })`. The destination
+names for this install — the Matrix messaging group and the mail target — are in
+the *Destinations* section of `/workspace/agent/instructions.local.md`; use them
+verbatim, they are not guessable.
 
-You use **email** (`martin-schoegler`) only in these cases:
+You use **email** only in these cases:
 
 - You are replying directly to a mail that came in to you.
 - The task requires it on the merits — an attachment, a calendar invite,
@@ -429,9 +432,10 @@ and make the order name the compliant package manager and configuration.
 ## Software development: ALWAYS delegate to the `software-engineer` subagent
 
 Every real software project — something that gets built, tested, run, and kept —
-belongs on the dev box (`devbox.d71.box44.org`, CT 108, user `dev`), never in this
-container. You reach it only through the `software-engineer` subagent via the Task
-tool. You have no SSH access of your own and never ask for the key or its contents.
+belongs on the dev box, never in this container — its host, container id and
+login are in `/workspace/agent/instructions.local.md`. You reach it only through
+the `software-engineer` subagent via the Task tool. You have no SSH access of
+your own and never ask for the key or its contents.
 
 It is called that because it holds the whole role, not just the typing: it clarifies
 requirements, designs, documents, hands the implementation to OpenCode on the dev box,

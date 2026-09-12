@@ -531,7 +531,7 @@ describe('duplicate delivery across a same-turn re-wrap retry', () => {
     getInboundDb()
       .prepare(
         `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
-         VALUES ('matrix-mg-17844', 'matrix-mg-17844', 'channel', 'matrix', 'matrix:@scm2409:matrix.org', NULL)`,
+         VALUES ('matrix-mg-1', 'matrix-mg-1', 'channel', 'matrix', 'matrix:@user:example.org', NULL)`,
       )
       .run();
 
@@ -543,12 +543,12 @@ describe('duplicate delivery across a same-turn re-wrap retry', () => {
       // The tool call happens mid-turn — i.e. after processQuery's own
       // initial markTurnStart(), same as in the live incident (the tool
       // send landed well after the turn began, not before it).
-      await sendMessage.handler({ to: 'matrix-mg-17844', text: replyText });
+      await sendMessage.handler({ to: 'matrix-mg-1', text: replyText });
       // Malformed: missing closing </message> tag, so dispatchResultText's
       // regex never matches — nothing is delivered, hasUnwrapped=true.
-      yield { type: 'result', text: `<message to="matrix-mg-17844">${replyText}` };
+      yield { type: 'result', text: `<message to="matrix-mg-1">${replyText}` };
       // Retry after the nudge: same text, properly wrapped this time.
-      yield { type: 'result', text: `<message to="matrix-mg-17844">${replyText}</message>` };
+      yield { type: 'result', text: `<message to="matrix-mg-1">${replyText}</message>` };
     }
     const query: AgentQuery = {
       push: (m: string) => {
@@ -560,7 +560,7 @@ describe('duplicate delivery across a same-turn re-wrap retry', () => {
     };
 
     const routing = {
-      platformId: 'matrix:@scm2409:matrix.org',
+      platformId: 'matrix:@user:example.org',
       channelType: 'matrix',
       threadId: null,
       inReplyTo: 'm1',

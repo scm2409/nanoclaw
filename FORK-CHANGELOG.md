@@ -11,6 +11,19 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-12 — cleanup
+
+Install-specific identifiers moved out of the tracked group config into the
+group's gitignored local facts, which the container composes into its project
+document at spawn (`local-facts.md`), so the agent reads the same values as
+before; the tracked files point at
+`/workspace/agent/instructions.local.md` by path. Test fixtures use the
+placeholders the other channel tests already use.
+
+vibecoded with claude-opus-5
+
+---
+
 ## 2026-09-12 — the rule against answering twice
 
 KaiL01 had been answering many turns twice: once through
@@ -317,7 +330,8 @@ vibecoded with Claude Opus 5
 ## 2026-09-07 — software-engineer subagent for KaiL01
 
 Added a `software-engineer` subagent to the main agent group: an SSH bridge to the devbox LXC
-(CT 108, `devbox.d71.box44.org`, unprivileged user `dev`), where KaiL is meant to
+(host, container id and unprivileged login are install-specific and live in the
+group's untracked local facts), where KaiL is meant to
 implement software projects. It is named for the role rather than the machine, because it owns the whole project
 lifecycle — clarifying requirements, designing, documenting, delegating the coding to
 OpenCode and verifying it, testing, committing — and `coder`, its counterpart for
@@ -1301,8 +1315,8 @@ written in German; `coder.md` and `mealie.md` were already English. Per the
 fork's "code/docs/skills always English, German only for talking to the user"
 rule, the four subagent files plus the prepend were translated to English with
 every security, secret-handling, and delegation rule preserved verbatim in
-meaning. IDs and tool names (`matrix-mg-17844`, `martin-schoegler`,
-`plugin_reviewqueue_*`, model names) are untouched. The "Content language:
+meaning. IDs and tool names (destination names, `plugin_reviewqueue_*`, model
+names) are untouched. The "Content language:
 German" policy in the Mealie section stays — it describes what the agent writes
 into Mealie, not the instruction language. Also updated the stale reference in
 `.claude/skills/add-dokuwiki-tool/SKILL.md` that quoted the old German section
