@@ -457,6 +457,12 @@ export async function processQuery(
   // the same prompt again. Unused (and unmaintained) when the provider
   // doesn't implement `onExchangeComplete`.
   const archivePrompts: string[] = [initialPrompt];
+  /**
+   * Follow-up messages handed to the stream whose turn has not produced a
+   * result yet. Held as claims rather than completions so a container death
+   * gives them back — see the note at the push site below.
+   */
+  const unackedFollowUpIds: string[] = [];
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open avoids
@@ -553,7 +559,20 @@ export async function processQuery(
         setCurrentInReplyTo(extractRouting(keep).inReplyTo);
         query.push(prompt);
         archivePrompts.push(prompt);
-        markCompleted(keptIds);
+        // Claimed, not completed. Handing a message to the stream is not the
+        // same as the model having read it: between the two sits a whole model
+        // call, and a container that dies in that window would leave an ack
+        // saying "done" for something nobody ever saw. Nothing redelivers a
+        // completed row, so the message would be gone while the sender believes
+        // it arrived (observed twice, 2026-09-09/10, both times via an ordinary
+        // operator restart). The messages that START a turn were always handled
+        // this way — completed on the result event — and the recovery path they
+        // rely on is already in place: `syncProcessingAcks` never writes
+        // 'processing' back to messages_in, so the row stays pending, and the
+        // next container's `clearStaleProcessingAcks()` drops the claim and
+        // re-reads it. Meanwhile `getPendingMessages` filters out anything with
+        // a claim, so this container cannot pick it up twice.
+        unackedFollowUpIds.push(...keptIds);
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node
         // terminates the container on unhandled-rejection. The initial-batch
@@ -624,7 +643,8 @@ export async function processQuery(
         // follow-up pushes. The agent may have responded via MCP
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
-        markCompleted(initialBatchIds);
+        markCompleted([...initialBatchIds, ...unackedFollowUpIds]);
+        unackedFollowUpIds.length = 0;
         if (event.text) {
           const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(event.text, routing);
           const willRetryTaskBlocks = shouldNudgeTaskBlocks(routing.taskRun, taskBlocks, taskBlockNudged);
@@ -726,6 +746,19 @@ export async function processQuery(
   } finally {
     done = true;
     clearInterval(pollHandle);
+    // Reaching here means the turn ended in this process — with a result, with
+    // an error, or aborted. Whatever happened, it happened, so ack what is
+    // left exactly as the outer loop does for the initial batch: an errored
+    // turn is not redelivered, and the user has already been told. Leaving the
+    // claim instead would make the message invisible to a container that is
+    // still alive, since `getPendingMessages` filters claimed rows — worse than
+    // the loss this change exists to prevent. The one path that does NOT run
+    // this block is the process dying, which is precisely the window we want
+    // recovered.
+    if (unackedFollowUpIds.length > 0) {
+      markCompleted(unackedFollowUpIds);
+      unackedFollowUpIds.length = 0;
+    }
   }
 
   return { continuation: queryContinuation };

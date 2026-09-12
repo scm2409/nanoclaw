@@ -950,3 +950,110 @@ describe('task-run turn wiring (real processQuery)', () => {
     expect(logs).not.toContain('second delivery decision handled');
   });
 });
+
+/**
+ * A message that arrives mid-turn is pushed into the running query and, until
+ * now, marked completed in the same breath. Between that mark and the model
+ * actually reading it there is a window — one long model call wide — in which a
+ * container death destroys the message for good: the ack says done, nothing
+ * redelivers it, and the sender believes it was received. That is not
+ * theoretical; it happened twice on 2026-09-09/10, both times through an
+ * ordinary operator restart.
+ *
+ * The messages that *start* a turn never had this problem: they are completed
+ * on the result event, and a container that dies first leaves them claimed, so
+ * the next container clears the claim and re-reads them. These tests hold the
+ * follow-up path to that same standard.
+ */
+describe('follow-up messages are not acked before the turn produces something', () => {
+  /** A query that stays open long enough for one follow-up poll, then results. */
+  function makeSlowQuery(): { query: AgentQuery; pushes: string[]; finish: () => void } {
+    const pushes: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 'sess-1' };
+      await gate;
+      yield { type: 'result', text: '<message to="user">done</message>', isError: false };
+    }
+    return {
+      pushes,
+      finish: () => release?.(),
+      query: {
+        push: (m: string) => {
+          pushes.push(m);
+        },
+        end: () => {},
+        events: events(),
+        abort: () => {},
+      },
+    };
+  }
+
+  const ackOf = (id: string) =>
+    (
+      getOutboundDb().prepare('SELECT status FROM processing_ack WHERE message_id = ?').get(id) as
+        | { status: string }
+        | undefined
+    )?.status;
+
+  it('holds the claim while the turn is still running, and completes it with the result', async () => {
+    insertMessage('m1', 'chat', { text: 'first' });
+    markProcessing(['m1']);
+    const { query, pushes, finish } = makeSlowQuery();
+    const run = processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    // Arrives while the turn is open — the follow-up poll picks it up.
+    insertMessage('m2', 'chat', { text: 'second' });
+    await Bun.sleep(900);
+
+    expect(pushes.length).toBeGreaterThanOrEqual(1);
+    // Handed to the model, but nothing has come back yet: still ours to redo.
+    expect(ackOf('m2')).toBe('processing');
+
+    finish();
+    await run;
+    expect(ackOf('m2')).toBe('completed');
+  }, 10_000);
+
+  it('holds the claim for the whole turn even when no result ever comes', async () => {
+    // A container killed during that hold finds the claim cleared on the next
+    // start and the row still pending — which is exactly how it comes back.
+    insertMessage('m1', 'chat', { text: 'first' });
+    markProcessing(['m1']);
+    const pushes: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 'sess-1' };
+      await gate;
+      // Stream ends with no result at all — the shape a dropped provider
+      // connection leaves behind.
+    }
+    const query: AgentQuery = {
+      push: (m: string) => {
+        pushes.push(m);
+      },
+      end: () => {},
+      events: events(),
+      abort: () => {},
+    };
+    const run = processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    insertMessage('m2', 'chat', { text: 'second' });
+    await Bun.sleep(900);
+    expect(ackOf('m2')).toBe('processing');
+
+    release?.();
+    await run;
+    // Once the turn has ended in this process it is acked like any other —
+    // an errored turn is not redelivered, and leaving the claim would make the
+    // message invisible to a container that is still alive. The window that
+    // matters is the one asserted above, while the turn was still open.
+    expect(ackOf('m2')).toBe('completed');
+  }, 10_000);
+});

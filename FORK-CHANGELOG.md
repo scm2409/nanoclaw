@@ -11,6 +11,44 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-12 — a message that arrives mid-turn is no longer acked before it is read
+
+A message arriving while a turn was already running got pushed into the open
+stream and marked `completed` in the same breath. Handing a prompt to the stream
+is not the same as the model having read it: between the two sits an entire
+model call, and a container that died in that window left behind an ack saying
+"done" for something nobody ever saw. Nothing redelivers a completed row, so the
+message was gone for good while the sender believed it had arrived. Twice real,
+on 09. and 10.09., both times through an ordinary operator restart.
+
+The messages that *start* a turn never had this problem — they are completed on
+the `result` event, and a container that dies first leaves them merely claimed,
+so the next start clears the claim and re-reads them. Follow-ups now hold to the
+same standard: they are collected in `unackedFollowUpIds` and completed together
+with the initial batch when the result arrives.
+
+The `finally` of `processQuery` acks whatever is left over, for turns that end
+without a result (an error, an abort, a dropped stream). That is deliberate, not
+a leak: such a turn is not redelivered and the user has already been told, and
+leaving the claim standing would make the message invisible to a container that
+is still alive, since `getPendingMessages` filters claimed rows — a worse loss
+than the one this change prevents. The single path that does not run that block
+is the process dying, which is exactly the window meant to be recovered:
+`clearStaleProcessingAcks()` drops the claim on the next start and the row is
+read again.
+
+The group's standing instructions described the old mechanism in the section on
+messages that arrive mid-turn ("the moment it is handed to you it is marked
+completed"), so that paragraph is corrected along with the code: the message is
+claimed for the turn and completed with its result, and the single case that
+gives it back is a container dying mid-turn. The rule itself is unchanged and
+still the important part — deal with such a message before ending the turn,
+because nothing inside a living container will remind you of it.
+
+vibecoded with claude-opus-5
+
+---
+
 ## 2026-09-11 — the agent learns when its container took its subagents down
 
 A subagent lives inside the CLI process inside the container, so a kill, a crash

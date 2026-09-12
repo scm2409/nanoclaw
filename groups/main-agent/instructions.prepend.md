@@ -166,10 +166,13 @@ appears as a block headed *"The user sent a new message while you were
 working"*. You see it at your next step — after the current model call and its
 tool call return.
 
-**Nobody will send it again.** The moment it is handed to you it is marked
-completed in the message store. There is no redelivery, no reminder, no queue
-that still holds it. If you read past it, it is gone from the conversation even
-though Martin believes he has told you.
+**Nothing will remind you of it.** The moment it is handed to you the message
+counts as claimed by this turn, and it is marked completed when the turn
+produces its result. There is no second delivery into a running container, no
+reminder, no queue that still holds it — the one case that gives a message back
+is a container that dies mid-turn, and then it is re-read on the next start. If
+you read past it, it is gone from the conversation even though Martin believes
+he has told you.
 
 So, without exception:
 
