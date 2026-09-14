@@ -11,6 +11,28 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-14 — an idle reclaim stops being reported as a death
+
+Every host-side stop goes through `docker stop`, so every one of them exits 137,
+and the exit note was written off that code alone. The result was that each
+routine 30-minute idle reclaim told the agent that its subagents had died with
+the container, that their completion notices could never arrive, and that all
+delegated work had to be re-verified where it lives. One session's inbound DB had
+collected eleven of these, not one of them about work that was ever at risk —
+which is a fair part of why the agent kept reporting dramatic container deaths.
+
+The host already knows better than the exit code does. It records why it stopped
+a container, and the container's last report says how much background work was
+in flight. When the stop was the idle ceiling and that report says zero, the note
+now says what actually happened: stopped for idleness, nothing was running,
+nothing to re-verify. Reassurance only where it is earned — a missing report, any
+other kill reason, and every crash keep the original warning, because not knowing
+is not the same as knowing nothing was lost.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-14 — work that finishes after the turn gets harvested instead of forgotten
 
 The first night with the widened ceiling produced eight container kills and not

@@ -4,6 +4,7 @@
  * The container runs the v2 agent-runner which polls the session DB.
  */
 import { ChildProcess, exec, spawn } from 'child_process';
+import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
@@ -48,17 +49,22 @@ import {
   heartbeatPath,
   markContainerRunning,
   markContainerStopped,
+  openOutboundDb,
   sessionDir,
   writeSessionMessage,
   writeSessionRouting,
 } from './session-manager.js';
+import { getContainerState } from './db/session-db.js';
 import { formatLocalTime } from './timezone.js';
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 
 /** Active containers tracked by session ID. */
-const activeContainers = new Map<string, { process: ChildProcess; containerName: string; startedAtMs: number }>();
+const activeContainers = new Map<
+  string,
+  { process: ChildProcess; containerName: string; startedAtMs: number; killReason?: string }
+>();
 
 /**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
@@ -213,11 +219,19 @@ async function spawnContainer(session: Session): Promise<void> {
   // on a wall-clock timer.
 
   container.on('close', (code) => {
+    // Read the kill reason before dropping the entry: it is the only record of
+    // whether this host stopped the container on purpose, and why.
+    const killReason = activeContainers.get(session.id)?.killReason ?? null;
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     containerLog?.close(`exited code=${code}`);
-    if (shouldNoteContainerExit(code)) {
+    const exitKind = classifyContainerExit({
+      code,
+      killReason,
+      backgroundTasks: readBackgroundTasks(session.agent_group_id, session.id),
+    });
+    if (exitKind !== 'silent') {
       // trigger 0: this must not wake anyone by itself. It is context for the
       // next real turn, whenever that comes — waking a container to tell it
       // that a container died would spawn one just to read its own obituary,
@@ -231,7 +245,10 @@ async function spawnContainer(session: Session): Promise<void> {
           channelType: 'agent',
           threadId: null,
           content: JSON.stringify({
-            text: containerExitNote(code as number, new Date()),
+            text:
+              exitKind === 'idle-reclaim'
+                ? containerIdleNote(new Date())
+                : containerExitNote(code as number, new Date()),
             sender: 'system',
             senderId: 'system',
           }),
@@ -285,6 +302,43 @@ export function shouldNoteContainerExit(code: number | null): boolean {
   return code !== null && code !== 0;
 }
 
+/**
+ * What kind of exit was this, from the next turn's point of view?
+ *
+ * Every host-side stop goes through `docker stop`, so every one of them exits
+ * 137 — the code alone cannot tell "reclaimed while idle" from "killed on top of
+ * live work". Judging by the code alone meant each of the 30-minute idle
+ * reclaims wrote the full "your subagents died, distrust your launch receipts"
+ * warning; one session had collected 11 of them by 2026-09-14, none about work
+ * that was ever at risk, and the agent duly reported its own dramatic deaths.
+ *
+ * Reassurance is only given where it is earned: the host itself stopped the
+ * container for idleness, *and* the container's last report said nothing was in
+ * flight. A missing report, any other kill reason and every crash keep the
+ * warning — not knowing is not the same as knowing nothing was lost.
+ */
+export type ContainerExitKind = 'silent' | 'idle-reclaim' | 'lost-work';
+
+export function classifyContainerExit(args: {
+  code: number | null;
+  killReason?: string | null;
+  backgroundTasks?: number | null;
+}): ContainerExitKind {
+  if (!shouldNoteContainerExit(args.code)) return 'silent';
+  if (args.killReason === 'absolute-ceiling' && args.backgroundTasks === 0) return 'idle-reclaim';
+  return 'lost-work';
+}
+
+/** What the next turn is told about a container that was reclaimed while idle. */
+export function containerIdleNote(at: Date): string {
+  return [
+    `System note: your previous container was stopped at ${formatLocalTime(at.toISOString(), TIMEZONE)}`,
+    'because nothing had happened in it for half an hour. Routine housekeeping, not a failure:',
+    'nothing of yours was running at the time, no subagent or background command was lost,',
+    'and this session resumes exactly where it left off. Nothing needs to be re-verified or re-reported.',
+  ].join(' ');
+}
+
 /** What the next turn is told about the container it did not survive. */
 export function containerExitNote(code: number, at: Date): string {
   return [
@@ -297,6 +351,25 @@ export function containerExitNote(code: number, at: Date): string {
   ].join(' ');
 }
 
+/**
+ * The container's last word on how much background work it had in flight. Read
+ * from its outbound DB after it has exited, so nothing is competing for the
+ * file. Returns null when the report cannot be read — which the classifier
+ * treats as "unknown", never as "nothing was running".
+ */
+function readBackgroundTasks(agentGroupId: string, sessionId: string): number | null {
+  let db: Database.Database | undefined;
+  try {
+    db = openOutboundDb(agentGroupId, sessionId);
+    const state = getContainerState(db);
+    return typeof state?.background_tasks === 'number' ? state.background_tasks : null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 /** Kill a container for a session. */
 export function killContainer(sessionId: string, reason: string, onExit?: () => void): void {
   const entry = activeContainers.get(sessionId);
@@ -306,6 +379,7 @@ export function killContainer(sessionId: string, reason: string, onExit?: () => 
     entry.process.once('close', onExit);
   }
 
+  entry.killReason = reason;
   log.info('Killing container', { sessionId, reason, containerName: entry.containerName });
   try {
     stopContainer(entry.containerName);

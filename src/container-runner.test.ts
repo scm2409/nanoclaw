@@ -2,7 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { resolveProviderName, shouldNoteContainerExit, containerExitNote } from './container-runner.js';
+import {
+  classifyContainerExit,
+  containerExitNote,
+  containerIdleNote,
+  resolveProviderName,
+  shouldNoteContainerExit,
+} from './container-runner.js';
 
 describe('resolveProviderName', () => {
   it('prefers session over container config', () => {
@@ -145,5 +151,51 @@ describe('container exit notes', () => {
     // The agent needs to know what to distrust, not merely that something died.
     expect(note.toLowerCase()).toContain('subagent');
     expect(note).toMatch(/verify|check/i);
+  });
+});
+
+// Every host-side stop is a `docker stop`, so every one of them exits 137 — the
+// code alone cannot tell an idle reclaim from a container dying on top of live
+// work. Judging by the code alone wrote the full "your subagents died, distrust
+// the launch receipts" warning after each of the 30-minute idle reclaims: 11 of
+// them had piled up in one session's inbound DB by 2026-09-14, every single one
+// about work that was never at risk.
+describe('classifyContainerExit', () => {
+  it('says nothing for an orderly signal or a clean exit', () => {
+    expect(classifyContainerExit({ code: null })).toBe('silent');
+    expect(classifyContainerExit({ code: 0 })).toBe('silent');
+  });
+
+  it('calls an idle reclaim what it is when nothing was running', () => {
+    expect(classifyContainerExit({ code: 137, killReason: 'absolute-ceiling', backgroundTasks: 0 })).toBe(
+      'idle-reclaim',
+    );
+  });
+
+  it('warns when the ceiling caught a container with work still in flight', () => {
+    expect(classifyContainerExit({ code: 137, killReason: 'absolute-ceiling', backgroundTasks: 2 })).toBe('lost-work');
+  });
+
+  it('warns when the background count is unknown', () => {
+    // No report to read means no grounds for reassurance.
+    expect(classifyContainerExit({ code: 137, killReason: 'absolute-ceiling', backgroundTasks: null })).toBe(
+      'lost-work',
+    );
+  });
+
+  it('warns for every other stop, idle or not', () => {
+    // A claim-stuck kill, an operator restart and a crash all mean something
+    // was interrupted rather than reclaimed.
+    expect(classifyContainerExit({ code: 137, killReason: 'claim-stuck', backgroundTasks: 0 })).toBe('lost-work');
+    expect(classifyContainerExit({ code: 137, killReason: 'restarted via ncl', backgroundTasks: 0 })).toBe('lost-work');
+    expect(classifyContainerExit({ code: 1, backgroundTasks: 0 })).toBe('lost-work');
+  });
+});
+
+describe('containerIdleNote', () => {
+  it('states the reclaim plainly and claims no casualties', () => {
+    const note = containerIdleNote(new Date('2026-09-14T13:53:11Z'));
+    expect(note).toMatch(/idle|nothing/i);
+    expect(note.toLowerCase()).not.toContain('died');
   });
 });
