@@ -219,6 +219,14 @@ export interface ContainerState {
   current_tool: string | null;
   tool_declared_timeout_ms: number | null;
   tool_started_at: string | null;
+  /**
+   * Background tasks the container still has in flight (background subagents,
+   * backgrounded Bash commands). Absent on session DBs written before the
+   * column existed. Meaningful only together with `updated_at`, which says
+   * when the container last vouched for the count.
+   */
+  background_tasks?: number | null;
+  updated_at?: string | null;
 }
 
 /**
@@ -231,14 +239,28 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
   try {
     const row = outDb
       .prepare(
-        `SELECT current_tool, tool_declared_timeout_ms, tool_started_at
+        `SELECT current_tool, tool_declared_timeout_ms, tool_started_at,
+                background_tasks, updated_at
            FROM container_state WHERE id = 1`,
       )
       .get() as ContainerState | undefined;
     return row ?? null;
   } catch {
-    // Table not present on older session DBs — treat as "no tool in flight".
-    return null;
+    // A session DB from before background_tasks existed still has the rest of
+    // the row, and the Bash-timeout tolerance depends on it. The container adds
+    // the column on its next start; until then, read what is there.
+    try {
+      const row = outDb
+        .prepare(
+          `SELECT current_tool, tool_declared_timeout_ms, tool_started_at
+             FROM container_state WHERE id = 1`,
+        )
+        .get() as ContainerState | undefined;
+      return row ?? null;
+    } catch {
+      // Table not present on older session DBs — treat as "no tool in flight".
+      return null;
+    }
   }
 }
 

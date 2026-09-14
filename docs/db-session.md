@@ -181,7 +181,10 @@ Access: `container/agent-runner/src/db/session-state.ts`.
 
 ### 4.4 `container_state`
 
-Single-row (`id=1`) tool-in-flight tracker. The container records the currently-running tool on `PreToolUse` and clears it on `PostToolUse`/`PostToolUseFailure`; the host reads it during the stale-container sweep to widen its stuck-tolerance window when `Bash` is running with a user-declared `timeout` over the normal threshold, so long-running scripts aren't killed as "stuck".
+Single-row (`id=1`) tracker for what the container is busy with. Two independent things live here, both read by the host's stale-container sweep to widen its stuck tolerance:
+
+- **Tool in flight.** The container records the currently-running tool on `PreToolUse` and clears it on `PostToolUse`/`PostToolUseFailure`, so a `Bash` call with a user-declared `timeout` over the normal threshold isn't killed as "stuck".
+- **Background tasks.** How many background subagents / backgrounded Bash commands the agent still has outstanding. Such work emits no stream events between launch and completion, so the heartbeat — touched per event — goes stale while the container is working as instructed. The host widens the idle ceiling to `BACKGROUND_CEILING_MS` while the count is above zero *and* `updated_at` is within `BACKGROUND_REPORT_FRESH_MS`; the container re-stamps it every poll tick while anything is outstanding and writes `0` when the turn ends.
 
 ```sql
 CREATE TABLE container_state (
@@ -189,13 +192,14 @@ CREATE TABLE container_state (
   current_tool             TEXT,
   tool_declared_timeout_ms INTEGER,
   tool_started_at          TEXT,
+  background_tasks         INTEGER NOT NULL DEFAULT 0,
   updated_at               TEXT NOT NULL
 );
 ```
 
-- **Writer (container):** `setContainerToolInFlight()` / `clearContainerToolInFlight()` in `container/agent-runner/src/db/connection.ts`, called from the `preToolUseHook` / `postToolUseHook` in `container/agent-runner/src/providers/claude.ts`.
-- **Reader (host):** `getContainerState()` in `src/db/session-db.ts`; consumed by the sweep's `bashTimeoutMs()` helper in `src/host-sweep.ts`.
-- `CREATE TABLE IF NOT EXISTS` — forward-compatible with `outbound.db` files created before this table existed; `getContainerState()` returns `null` if the table or row is absent.
+- **Writer (container):** `setContainerToolInFlight()` / `clearContainerToolInFlight()` and `setBackgroundTasks()` / `refreshBackgroundTasks()` in `container/agent-runner/src/db/connection.ts`, called from the `preToolUseHook` / `postToolUseHook` in `container/agent-runner/src/providers/claude.ts` and from the poll loop's `background-tasks` event.
+- **Reader (host):** `getContainerState()` in `src/db/session-db.ts`; consumed by the sweep's `bashTimeoutMs()` and `hasLiveBackgroundWork()` helpers in `src/host-sweep.ts`.
+- `CREATE TABLE IF NOT EXISTS` — forward-compatible with `outbound.db` files created before this table existed; `getContainerState()` returns `null` if the table or row is absent, and falls back to the pre-`background_tasks` column set for session DBs written before it.
 
 ---
 

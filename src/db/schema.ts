@@ -269,6 +269,7 @@ CREATE TABLE IF NOT EXISTS container_state (
   current_tool             TEXT,
   tool_declared_timeout_ms INTEGER,
   tool_started_at          TEXT,
+  background_tasks         INTEGER NOT NULL DEFAULT 0,
   updated_at               TEXT NOT NULL
 );
 `;

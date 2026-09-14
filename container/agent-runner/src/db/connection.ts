@@ -28,6 +28,9 @@ let _inbound: Database | null = null;
 let _outbound: Database | null = null;
 let _heartbeatPath: string = DEFAULT_HEARTBEAT_PATH;
 let _testMode = false;
+// Mirrors container_state.background_tasks so the periodic re-stamp knows
+// whether there is anything to vouch for.
+let _backgroundTasks = 0;
 
 /**
  * Avoid all cached db reads; open inbound.db read-only with mmap and page cache disabled.
@@ -109,9 +112,16 @@ export function getOutboundDb(): Database {
         current_tool             TEXT,
         tool_declared_timeout_ms INTEGER,
         tool_started_at          TEXT,
+        background_tasks         INTEGER NOT NULL DEFAULT 0,
         updated_at               TEXT NOT NULL
       );
     `);
+    const stateCols = new Set(
+      (_outbound.prepare("PRAGMA table_info('container_state')").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!stateCols.has('background_tasks')) {
+      _outbound.exec(`ALTER TABLE container_state ADD COLUMN background_tasks INTEGER NOT NULL DEFAULT 0`);
+    }
   }
   return _outbound;
 }
@@ -153,6 +163,41 @@ export function clearContainerToolInFlight(): void {
 }
 
 /**
+ * Record how many background tasks (background subagents, backgrounded Bash
+ * commands) the agent still has in flight.
+ *
+ * This is the container's half of the deal that keeps it alive through work it
+ * delegated: such tasks emit no stream events between launch and completion, so
+ * the heartbeat goes stale while everything is fine, and the host's idle ceiling
+ * killed the container out from under them. The host widens that ceiling — up to
+ * a cap — while this count is above zero and recently stamped.
+ */
+export function setBackgroundTasks(count: number): void {
+  _backgroundTasks = count;
+  const now = new Date().toISOString();
+  getOutboundDb()
+    .prepare(
+      `INSERT INTO container_state (id, background_tasks, updated_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         background_tasks = excluded.background_tasks,
+         updated_at = excluded.updated_at`,
+    )
+    .run(count, now);
+}
+
+/**
+ * Re-stamp the outstanding count so it stays trustworthy while the container
+ * waits. A count nobody refreshes tells the host nothing about now, which is
+ * why the host ignores a stale one — and why a container with nothing
+ * outstanding must not stamp anything here.
+ */
+export function refreshBackgroundTasks(): void {
+  if (_backgroundTasks <= 0) return;
+  setBackgroundTasks(_backgroundTasks);
+}
+
+/**
  * Touch the heartbeat file — replaces the old touchProcessing() DB writes.
  * The host checks this file's mtime for stale container detection.
  * A file touch is cheaper and avoids cross-boundary DB write contention.
@@ -183,6 +228,7 @@ export function clearStaleProcessingAcks(): void {
 /** For tests — creates in-memory DBs with the session schemas. */
 export function initTestSessionDb(): { inbound: Database; outbound: Database } {
   _testMode = true;
+  _backgroundTasks = 0;
   _inbound = new Database(':memory:');
   _inbound.exec('PRAGMA foreign_keys = ON');
   _inbound.exec(`
@@ -250,6 +296,7 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
       current_tool             TEXT,
       tool_declared_timeout_ms INTEGER,
       tool_started_at          TEXT,
+      background_tasks         INTEGER NOT NULL DEFAULT 0,
       updated_at               TEXT NOT NULL
     );
   `);
@@ -258,6 +305,7 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
 }
 
 export function closeSessionDb(): void {
+  _backgroundTasks = 0;
   _inbound?.close();
   _inbound = null;
   _testMode = false;

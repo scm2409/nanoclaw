@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { deleteOrphanProcessingClaims, getProcessingClaims } from './db/session-db.js';
 import {
   ABSOLUTE_CEILING_MS,
+  BACKGROUND_CEILING_MS,
   CLAIM_STUCK_MS,
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
@@ -140,6 +141,126 @@ describe('decideStuckAction', () => {
         tool_started_at: new Date(BASE - 5 * 60 * 1000).toISOString(),
       },
       claims: [claim('msg-1', 5 * 60 * 1000)],
+    });
+    expect(res.action).toBe('ok');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Background work (2026-09-13): delegated work that produces no stream
+  // events for a while — a background subagent, a backgrounded Bash command —
+  // leaves the heartbeat untouched, and the 30-min ceiling used to kill the
+  // container out from under it. The container reports how many background
+  // tasks it still has outstanding; the host widens the ceiling for them, but
+  // only up to BACKGROUND_CEILING_MS and only while the report is fresh.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('extends the ceiling while the container reports outstanding background tasks', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: BASE - ABSOLUTE_CEILING_MS - 60_000,
+      containerState: {
+        current_tool: null,
+        tool_declared_timeout_ms: null,
+        tool_started_at: null,
+        background_tasks: 1,
+        updated_at: new Date(BASE - 30_000).toISOString(),
+      },
+      claims: [],
+    });
+    expect(res.action).toBe('ok');
+  });
+
+  it('kills once background work passes the background ceiling', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: BASE - BACKGROUND_CEILING_MS - 60_000,
+      containerState: {
+        current_tool: null,
+        tool_declared_timeout_ms: null,
+        tool_started_at: null,
+        background_tasks: 2,
+        updated_at: new Date(BASE - 30_000).toISOString(),
+      },
+      claims: [],
+    });
+    expect(res.action).toBe('kill-ceiling');
+    if (res.action !== 'kill-ceiling') return;
+    expect(res.ceilingMs).toBe(BACKGROUND_CEILING_MS);
+  });
+
+  it('ignores a stale background-task report', () => {
+    // The count is only trustworthy while the container keeps re-stamping it.
+    // A report last written an hour ago says nothing about now.
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: BASE - ABSOLUTE_CEILING_MS - 60_000,
+      containerState: {
+        current_tool: null,
+        tool_declared_timeout_ms: null,
+        tool_started_at: null,
+        background_tasks: 1,
+        updated_at: new Date(BASE - 60 * 60 * 1000).toISOString(),
+      },
+      claims: [],
+    });
+    expect(res.action).toBe('kill-ceiling');
+    if (res.action !== 'kill-ceiling') return;
+    expect(res.ceilingMs).toBe(ABSOLUTE_CEILING_MS);
+  });
+
+  it('does not extend the ceiling when no background task is outstanding', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: BASE - ABSOLUTE_CEILING_MS - 60_000,
+      containerState: {
+        current_tool: null,
+        tool_declared_timeout_ms: null,
+        tool_started_at: null,
+        background_tasks: 0,
+        updated_at: new Date(BASE - 30_000).toISOString(),
+      },
+      claims: [],
+    });
+    expect(res.action).toBe('kill-ceiling');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Immortal container (2026-09-13): a container that never ran a turn never
+  // writes a heartbeat, so the ceiling check skipped it forever. Found live:
+  // one container up 2 days, 207k idle poll iterations, holding ~0.5 GB.
+  // Spawn time is the baseline when no heartbeat exists.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('kills a container that never wrote a heartbeat and is past the ceiling since spawn', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: 0,
+      containerStartedAtMs: BASE - ABSOLUTE_CEILING_MS - 60_000,
+      containerState: null,
+      claims: [],
+    });
+    expect(res.action).toBe('kill-ceiling');
+    if (res.action !== 'kill-ceiling') return;
+    expect(res.heartbeatAgeMs).toBeGreaterThan(ABSOLUTE_CEILING_MS);
+  });
+
+  it('leaves a freshly spawned container without a heartbeat alone', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: 0,
+      containerStartedAtMs: BASE - 10_000,
+      containerState: null,
+      claims: [],
+    });
+    expect(res.action).toBe('ok');
+  });
+
+  it('still skips the ceiling when neither heartbeat nor spawn time is known', () => {
+    const res = decideStuckAction({
+      now: BASE,
+      heartbeatMtimeMs: 0,
+      containerState: null,
+      claims: [],
     });
     expect(res.action).toBe('ok');
   });

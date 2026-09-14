@@ -517,8 +517,10 @@ reads that and mirrors completion back.
 
 **Liveness / stale detection**: The container touches a `/workspace/.heartbeat` file rather
 than writing the DB. The host sweep watches that mtime (widening its tolerance when
-`container_state` shows a long-declared Bash running) to decide a container has crashed, then
-increments `tries` and reschedules `process_after` with exponential backoff. On the next
+`container_state` shows a long-declared Bash running, or background tasks outstanding) to
+decide a container has crashed, then increments `tries` and reschedules `process_after` with
+exponential backoff. With no heartbeat file at all, the container's spawn time is the
+baseline — otherwise a container that never runs a turn is never collected. On the next
 container startup, leftover `processing` acks are cleared so orphaned claims re-process.
 
 ### Error Handling and Retries

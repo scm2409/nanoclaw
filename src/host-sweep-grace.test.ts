@@ -25,6 +25,7 @@ vi.mock('./container-runner.js', () => ({
   isContainerRunning: vi.fn().mockReturnValue(false),
   wakeContainer: vi.fn().mockResolvedValue(true),
   killContainer: vi.fn(),
+  containerStartedAtMs: vi.fn().mockReturnValue(null),
 }));
 
 import { initTestDb, closeDb, runMigrations, createAgentGroup } from './db/index.js';

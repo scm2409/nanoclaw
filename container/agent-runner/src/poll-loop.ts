@@ -7,7 +7,13 @@ import {
   type MessageInRow,
 } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
-import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
+import {
+  getInboundDb,
+  refreshBackgroundTasks,
+  setBackgroundTasks,
+  touchHeartbeat,
+  clearStaleProcessingAcks,
+} from './db/connection.js';
 import {
   clearContinuation,
   clearCurrentInReplyTo,
@@ -478,6 +484,10 @@ export async function processQuery(
   let corruptionStreak = 0;
   const pollHandle = setInterval(() => {
     if (done || pollInFlight || endedForCommand) return;
+    // Keep the background-work report current. The count itself only changes on
+    // a task event; the host ignores a count nobody has vouched for lately, so
+    // a silent hour of legitimate delegated work still needs a pulse.
+    refreshBackgroundTasks();
     pollInFlight = true;
 
     void (async () => {
@@ -614,12 +624,31 @@ export async function processQuery(
   // Echo suppression dedupes within one turn only; anchor the first turn here.
   markTurnStart();
 
+  // Is the model currently working? Set false when a turn results, true again
+  // whenever something is pushed into the query. Only used to decide whether a
+  // settled background task still has a turn that will notice it.
+  let turnActive = true;
+  const pushToQuery = (text: string): void => {
+    turnActive = true;
+    query.push(text);
+  };
+
   try {
     for await (const event of query.events) {
       handleEvent(event, routing);
       touchHeartbeat();
 
-      if (event.type === 'subagent') {
+      if (event.type === 'progress') {
+        // A `progress` event is the SDK settling a background task — its
+        // statuses are terminal by definition. Mid-turn the model is handed the
+        // notification anyway and carries on; after the turn ended nothing
+        // consumes it, and the work sits unharvested until the idle ceiling
+        // reclaims the container (live on 2026-09-13: a gate finished two
+        // seconds after the closing message and the verdict was never read).
+        if (shouldNudgeSettledTask(turnActive, done || endedForCommand)) {
+          pushToQuery(buildSettledTaskNudge(event.message));
+        }
+      } else if (event.type === 'subagent') {
         if (logSubagents) deliverSubagentNotice(event, routing);
       } else if (event.type === 'error') {
         if (event.classification) {
@@ -636,6 +665,7 @@ export async function processQuery(
         // Claude session with no prior context.
         setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
+        turnActive = false;
         if (showTokenUsage && event.modelUsage) deliverTokenUsageNotice(event.modelUsage, routing);
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
@@ -709,7 +739,7 @@ export async function processQuery(
               unwrappedNudged = true;
               const destinations = getAllDestinations();
               const names = destinations.map((d) => d.name).join(', ');
-              query.push(
+              pushToQuery(
                 `<system>Your response was not delivered — it was not wrapped in <message to="name">...</message> blocks. ` +
                   `All output must be wrapped: use <message to="name"> for content to send, or <internal> for scratchpad. ` +
                   `Your destinations: ${names}. ` +
@@ -721,7 +751,7 @@ export async function processQuery(
               const names = getAllDestinations()
                 .map((d) => d.name)
                 .join(', ');
-              query.push(buildTaskBlockNudge(taskBlocks, names));
+              pushToQuery(buildTaskBlockNudge(taskBlocks, names));
             }
             // A retry result (wrapping or task-block nudge) answers the SAME
             // user prompt — keep it queued so the retry archives against it,
@@ -746,6 +776,11 @@ export async function processQuery(
   } finally {
     done = true;
     clearInterval(pollHandle);
+    // The turn's CLI process owns every background task it started, so when the
+    // turn ends nothing of ours is in flight any more — whatever the last count
+    // said. Leaving it standing would hand the next idle stretch a ceiling
+    // extension it has not earned.
+    setBackgroundTasks(0);
     // Reaching here means the turn ended in this process — with a result, with
     // an error, or aborted. Whatever happened, it happened, so ack what is
     // left exactly as the outer loop does for the initial batch: an errored
@@ -804,6 +839,14 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
       break;
     case 'subagent':
       log(`Subagent started: ${event.subagentType} (model: ${event.model})`);
+      break;
+    case 'background-tasks':
+      // Tell the host what is still running for us. It cannot see inside the
+      // container, and background work is silent between launch and
+      // completion — without this it reads the silence as an idle container
+      // and kills the work along with it.
+      log(`Background tasks outstanding: ${event.outstanding}`);
+      setBackgroundTasks(event.outstanding);
       break;
   }
 }
@@ -1108,6 +1151,29 @@ export function shouldNudgeTaskBlocks(
   alreadyNudged: boolean,
 ): boolean {
   return taskRun && taskBlocks.length > 0 && !alreadyNudged;
+}
+
+/**
+ * Should a settled background task be pushed back into the query?
+ *
+ * Only when no turn is running — mid-turn the CLI hands the notification to the
+ * model itself, and a nudge would be a second copy of something it already has.
+ * Never while the query is ending or being aborted for a command: the push
+ * would either be dropped or restart a stream that is on its way out.
+ */
+export function shouldNudgeSettledTask(turnActive: boolean, ending: boolean): boolean {
+  return !turnActive && !ending;
+}
+
+/** What the agent is told about work that finished after it stopped listening. */
+export function buildSettledTaskNudge(summary: string): string {
+  return (
+    '<system>Background work you had delegated finished after your turn ended, so nothing has read it yet: ' +
+    `${escapePromptXml(summary)}\n` +
+    'Harvest it now where the work actually lives (files, git history, processes on the target machine) rather than ' +
+    'from the launch receipt, then say what it means for whoever was waiting on it. ' +
+    'If it changes nothing and nobody is waiting, record it and stay quiet — do not send a message just to acknowledge this.</system>'
+  );
 }
 
 export function buildTaskBlockNudge(taskBlocks: TaskMessageBlock[], destinationNames: string): string {

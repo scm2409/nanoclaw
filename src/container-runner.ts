@@ -58,7 +58,7 @@ import type { AgentGroup, Session } from './types.js';
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 
 /** Active containers tracked by session ID. */
-const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
+const activeContainers = new Map<string, { process: ChildProcess; containerName: string; startedAtMs: number }>();
 
 /**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
@@ -76,6 +76,15 @@ export function getActiveContainerCount(): number {
 
 export function isContainerRunning(sessionId: string): boolean {
   return activeContainers.has(sessionId);
+}
+
+/**
+ * When this session's container was spawned, or null if none is running. The
+ * host sweep uses it as the ceiling baseline for a container that has never
+ * written a heartbeat — otherwise such a container is never collected.
+ */
+export function containerStartedAtMs(sessionId: string): number | null {
+  return activeContainers.get(sessionId)?.startedAtMs ?? null;
 }
 
 /**
@@ -171,7 +180,7 @@ async function spawnContainer(session: Session): Promise<void> {
 
   const container = spawn(CONTAINER_RUNTIME_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-  activeContainers.set(session.id, { process: container, containerName });
+  activeContainers.set(session.id, { process: container, containerName, startedAtMs: Date.now() });
   markContainerRunning(session.id);
 
   // Persist the container's full stderr. `--rm` means the container's own logs

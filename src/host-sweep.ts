@@ -15,10 +15,14 @@
  *   tries++. Existing retry machinery does the rest.
  *
  *   If the container IS running:
- *     1. Absolute ceiling: heartbeat age > max(30 min, current_bash_timeout)
- *        → kill. Covers the "alive but silent for 30 min" case. Extended
- *        only while Bash is declared as running longer, honouring the
- *        user's own timeout directive. Kill then resets processing rows.
+ *     1. Absolute ceiling: heartbeat age > max(30 min, current_bash_timeout,
+ *        4 h while background work is outstanding) → kill. Covers the "alive
+ *        but silent for 30 min" case. Extended while Bash is declared as
+ *        running longer, honouring the user's own timeout directive, and while
+ *        the container reports background tasks in flight, which produce no
+ *        stream events and hence no heartbeat. With no heartbeat file at all
+ *        the container's spawn time is the baseline. Kill then resets
+ *        processing rows.
  *
  *     2. Message-scoped stuck: for each 'processing' row, tolerance =
  *        max(60s, current_bash_timeout_ms_if_Bash_running). If
@@ -45,7 +49,7 @@ import {
 } from './db/session-db.js';
 import { log } from './log.js';
 import { openInboundDb, openOutboundDb, openOutboundDbRw, inboundDbPath, heartbeatPath } from './session-manager.js';
-import { isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
+import { containerStartedAtMs, isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
 import type { Session } from './types.js';
 
 /**
@@ -67,6 +71,18 @@ export const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
 // Stuck tolerance window applied per 'processing' claim — "did we see any
 // signs of life since this message was claimed?"
 export const CLAIM_STUCK_MS = 60 * 1000;
+// Ceiling that applies instead while the container reports background work in
+// flight (a background subagent, a backgrounded Bash command). Such work emits
+// no stream events between launch and completion, so the heartbeat — which is
+// touched per event — goes stale while the container is doing exactly what it
+// was asked to do. Six containers died that way on 2026-09-12/13, each taking
+// its delegated work with it. Still a ceiling and not an exemption: a container
+// wedged behind a task that never settles has to die eventually.
+export const BACKGROUND_CEILING_MS = 4 * 60 * 60 * 1000;
+// How long a background-task report stays trustworthy. The container re-stamps
+// container_state while tasks are outstanding; a report nobody refreshed says
+// nothing about now.
+export const BACKGROUND_REPORT_FRESH_MS = 5 * 60 * 1000;
 const MAX_TRIES = 5;
 const BACKOFF_BASE_MS = 5000;
 
@@ -83,23 +99,31 @@ export type StuckDecision =
 export function decideStuckAction(args: {
   now: number;
   heartbeatMtimeMs: number; // 0 when heartbeat file absent
+  containerStartedAtMs?: number | null; // 0/null when the spawn time is unknown
   containerState: ContainerState | null;
   claims: Array<{ message_id: string; status_changed: string }>;
 }): StuckDecision {
   const { now, heartbeatMtimeMs, containerState, claims } = args;
   const declaredBashMs = bashTimeoutMs(containerState);
 
-  // Ceiling check only applies when we have an actual heartbeat timestamp.
-  // A freshly-spawned container hasn't had any SDK activity yet so no
-  // heartbeat file exists — if we treated that as infinitely stale we'd
-  // kill every container within seconds of spawn. Genuinely-dead containers
-  // that never wrote a heartbeat are caught by the separate "container
-  // process not running" cleanup path, not here. If a fresh container is
-  // hanging at the gate (claimed a message but never did anything) the
-  // claim-stuck check below handles it.
-  if (heartbeatMtimeMs !== 0) {
-    const heartbeatAge = now - heartbeatMtimeMs;
-    const ceiling = Math.max(ABSOLUTE_CEILING_MS, declaredBashMs ?? 0);
+  // The ceiling needs a baseline to measure against. Normally that's the
+  // heartbeat; a freshly-spawned container hasn't had any SDK activity yet, so
+  // no heartbeat file exists, and treating its absence as infinitely stale
+  // would kill every container within seconds of spawn. But treating it as
+  // exemption instead made a container that never runs a turn immortal: found
+  // live on 2026-09-13, one up for two days across 207k idle poll iterations,
+  // holding its memory the whole time. Spawn time is the honest fallback — it
+  // is fresh exactly when the container is. If a fresh container is hanging at
+  // the gate (claimed a message but never did anything) the claim-stuck check
+  // below handles it either way.
+  const ceilingBaseline = heartbeatMtimeMs !== 0 ? heartbeatMtimeMs : (args.containerStartedAtMs ?? 0);
+  if (ceilingBaseline !== 0) {
+    const heartbeatAge = now - ceilingBaseline;
+    const ceiling = Math.max(
+      ABSOLUTE_CEILING_MS,
+      declaredBashMs ?? 0,
+      hasLiveBackgroundWork(containerState, now) ? BACKGROUND_CEILING_MS : 0,
+    );
     if (heartbeatAge > ceiling) {
       return { action: 'kill-ceiling', heartbeatAgeMs: heartbeatAge, ceilingMs: ceiling };
     }
@@ -309,6 +333,20 @@ function heartbeatMtimeMs(agentGroupId: string, sessionId: string): number {
   }
 }
 
+/**
+ * Does the container currently have background work in flight that it has
+ * vouched for recently? Both halves matter: a count of zero means nothing is
+ * delegated, and a count nobody re-stamped within BACKGROUND_REPORT_FRESH_MS
+ * is a leftover from a container that has since gone quiet.
+ */
+function hasLiveBackgroundWork(state: ContainerState | null, now: number): boolean {
+  if (!state || !state.background_tasks) return false;
+  if (!state.updated_at) return false;
+  const stampedAt = parseSqliteUtc(state.updated_at);
+  if (Number.isNaN(stampedAt)) return false;
+  return now - stampedAt <= BACKGROUND_REPORT_FRESH_MS;
+}
+
 function bashTimeoutMs(state: ContainerState | null): number | null {
   if (!state || state.current_tool !== 'Bash') return null;
   return typeof state.tool_declared_timeout_ms === 'number' ? state.tool_declared_timeout_ms : null;
@@ -323,6 +361,7 @@ function enforceRunningContainerSla(
   const decision = decideStuckAction({
     now: Date.now(),
     heartbeatMtimeMs: heartbeatMtimeMs(agentGroupId, session.id),
+    containerStartedAtMs: containerStartedAtMs(session.id),
     containerState: getContainerState(outDb),
     claims: getProcessingClaims(outDb),
   });

@@ -13,6 +13,7 @@ import {
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { TIMEZONE, formatLocalStamp } from '../timezone.js';
+import { BackgroundTaskTracker, type TaskLifecycleMessage } from './background-tasks.js';
 import { loadFileSubagents, type FileSubagentDefinition } from './file-subagents.js';
 import { registerProvider } from './provider-registry.js';
 import type {
@@ -1067,12 +1068,20 @@ export class ClaudeProvider implements AgentProvider {
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
       let lastAssistantText: string | null = null;
+      // Background work the CLI is carrying for us. Tracked per query because
+      // a task cannot outlive the CLI process that owns it.
+      const backgroundTasks = new BackgroundTaskTracker();
       for await (const message of sdkMessages()) {
         if (aborted) return;
         messageCount++;
 
         // Yield activity for every SDK event so the poll loop knows the agent is working
         yield { type: 'activity' };
+
+        // Report the count only when it moves — the host reads it as "is there
+        // still something in flight", not as a stream of ticks.
+        const outstanding = backgroundTasks.observe(message as TaskLifecycleMessage);
+        if (outstanding !== null) yield { type: 'background-tasks', outstanding };
 
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };

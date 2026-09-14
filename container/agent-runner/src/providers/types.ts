@@ -173,6 +173,12 @@ export type ProviderEvent =
       >;
     }
   | { type: 'error'; message: string; retryable: boolean; classification?: string; resetsAt?: number }
+  /**
+   * A background task settled. The SDK's task-notification statuses are
+   * terminal by definition (completed | failed | stopped), so the poll loop
+   * treats this as "delegated work is done" — and pushes it back into the query
+   * when the turn that delegated it has already ended.
+   */
   | { type: 'progress'; message: string }
   /**
    * A subagent (SDK `Task` tool) was invoked. `model` is the resolved model
@@ -181,6 +187,17 @@ export type ProviderEvent =
    * subagent support emit this; others simply never yield it.
    */
   | { type: 'subagent'; subagentType: string; model: string; description?: string }
+  /**
+   * How many background tasks (background subagents, backgrounded Bash
+   * commands) the provider currently has in flight. Emitted only when the
+   * number changes.
+   *
+   * Background work emits nothing between its launch and its completion, so
+   * the heartbeat — touched per event — goes stale while the container is
+   * working as instructed, and the host's idle ceiling used to kill it. The
+   * host widens that ceiling, up to a cap, while this count is above zero.
+   */
+  | { type: 'background-tasks'; outstanding: number }
   /**
    * A tool the agent invoked, and what it got back. These exist so the
    * container log records what the agent actually *did*, independently of

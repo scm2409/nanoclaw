@@ -11,6 +11,77 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-14 — work that finishes after the turn gets harvested instead of forgotten
+
+The first night with the widened ceiling produced eight container kills and not
+one of them was wrong: every kill logged `ceilingMs=1800000`, the four-hour
+extension never fired, because in each case the container had already reported
+zero background tasks outstanding. The mechanism works; it simply never had to.
+
+What the night did surface is the other half of the same problem. At 00:06 the
+main agent's container was reclaimed two seconds past the ceiling, and the last
+three lines of its log are a closing message to Martin, the background count
+dropping to zero, and the R65 emulator gate reporting `completed (exit code 0)`.
+The gate settled immediately after the turn ended — and a notification that
+arrives after the turn has no one to read it. Mid-turn the CLI hands it to the
+model, which is why the same log shows the agent working through earlier
+notifications without trouble; post-turn it reaches the runner and stops there.
+Thirty minutes later the container went, with the verdict still unread and the
+next wake left to reconstruct it from the devbox.
+
+The poll loop now tracks whether a turn is running, and pushes a settled task
+back into the query when none is. The nudge says what finished and asks for the
+result to be verified where the work lives rather than taken from the launch
+receipt — and explicitly not to send a message just to acknowledge it, since
+plenty of background work concerns nobody but the agent. Suppressed while a turn
+is in flight, including the re-wrap and task-block correction turns, which are
+pushes like any other.
+
+vibecoded with Claude Opus 5
+
+---
+
+## 2026-09-13 — the idle ceiling stops killing containers that are waiting on their own work
+
+Six agent containers died between 12.09. and 13.09., exit 137 each time, and the
+reports blamed memory. They were wrong: `/proc/vmstat` shows `oom_kill 0` since
+boot 49 days ago, no kernel OOM kill ever happened on this machine. Every one of
+the six was NanoClaw killing its own container — `reason="absolute-ceiling"` in
+the host log, one second before dockerd's "failed to exit within 1s of signal 15
+- using the force".
+
+The mechanism: `touchHeartbeat()` is called from the SDK event stream and
+nowhere else, so the heartbeat measures *stream events*, not work. A background
+subagent and a backgrounded Bash command both emit nothing between their launch
+and their completion — the container sits there with delegated work in flight
+and looks exactly like an idle one. After 30 minutes the sweep killed it, and
+the work went with it: the assumption written down in September, that every
+subagent step emits a task notification and thus a heartbeat, holds only while
+the gaps stay under half an hour. The last of the six was waiting on an OpenCode
+run on the devbox.
+
+The container now reports what it is carrying. A tracker follows the SDK's task
+lifecycle (`task_started`, and both settle paths — `task_notification` and a
+terminal `task_updated` patch), the provider emits the outstanding count when it
+changes, and the poll loop writes it to `container_state.background_tasks` and
+re-stamps it every tick so the host can tell a current report from a leftover.
+The host extends the ceiling to four hours while that report is fresh and the
+count is above zero. Still a ceiling, not an exemption: a container wedged
+behind a task that never settles dies at four hours, and a report nobody
+refreshes within five minutes is ignored outright.
+
+The same sweep had the opposite bug at the other end. A container that never ran
+a turn never writes a heartbeat, and the missing file was read as "skip the
+ceiling check" — which made such containers immortal. One was found alive after
+two days across 207k idle poll iterations, holding a message it would never act
+on and its memory with it. Spawn time is now the baseline when no heartbeat
+exists; it is fresh exactly when the container is, so a freshly spawned one is
+as protected as before.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-12 — cleanup
 
 Install-specific identifiers moved out of the tracked group config into the

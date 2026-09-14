@@ -112,7 +112,7 @@ type ProviderEvent =
 - **`init`** — emitted once per query when the provider establishes or resumes a session. The agent-runner captures `continuation` and persists it for future resume.
 - **`result`** — emitted when the agent produces a complete response. May be emitted multiple times per query (e.g., Claude's multi-turn with subagents). `isError` is set when the SDK flagged the turn as an error (e.g. a non-retryable billing error) so the poll-loop still surfaces the text instead of dropping it. The agent-runner writes each result to messages_out.
 - **`error`** — emitted on failure. `retryable` indicates whether the agent-runner should retry. `classification` is optional detail (e.g., 'quota').
-- **`progress`** — optional, for logging. The agent-runner logs these but doesn't act on them.
+- **`progress`** — a background task settled (the SDK's task-notification statuses are terminal by definition). Logged, and — when the turn that delegated the work has already ended — pushed back into the query as a harvest nudge, because nothing else would ever read it. Mid-turn the CLI hands the notification to the model itself, so no nudge is sent.
 - **`activity`** — a liveness signal. Providers MUST yield it on every underlying SDK event (tool call, thinking, partial message) so the poll-loop's idle timer stays honest during long tool runs.
 
 ## Provider Implementations
