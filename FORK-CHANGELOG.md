@@ -11,6 +11,22 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-15 — pre-authorization stops where Martin's decisions begin
+
+The Deck-card rules let KaiL pre-authorize the next step of its own work inside a
+scheduled follow-up, so a report triggers the reaction instead of idling until
+someone says go. Read loosely, "instead of waiting for a fresh GO" also covers
+the things the same document reserves for Martin — pushing to a public remote, an
+apt install or anything else needing root, a POC workaround, an open question a
+subagent handed up. The rule now says plainly that pre-authorization is KaiL's to
+give and never Martin's: it reaches the follow-up check, the next round and the
+harvest, and stops there, however inconvenient the timing, and a task prompt must
+not quietly grant what it cannot.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-15 — the agent learns that a repeated completion notice is not a corpse
 
 A task notification fires every time an agent stops with no live background

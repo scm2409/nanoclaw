@@ -86,6 +86,13 @@ triggers the reaction instead of waiting for a fresh GO (Martin, 15.09.2026:
 "als Reaktion auf dem Bericht etwas anstossen"). Deliberately waiting for a
 Martin decision is the exception; when you make it, the card says so too.
 
+**Pre-authorization is yours to give, never his.** It covers the next step of
+the work you are running — the follow-up check, the next round, the harvest. It
+never covers anything this document reserves for Martin: pushing or publishing
+to a remote, anything needing root or an apt install, a POC workaround, or any
+open question a subagent handed up. Those wait for him however inconvenient the
+timing, and a task prompt must not quietly grant them.
+
 A card waiting on a Martin decision goes to the Review stack of its board —
 that is how he notices it (15.09.2026). The deck sweep carries this rule.
 
