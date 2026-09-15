@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-15 — the harvest note stops drumming, and stops getting the engineer accused of dying
+
+Yesterday's note fired for every background task that settled after a turn, and
+the agent fires off plenty: seconds-long SSH greps, launched mid-turn, settling
+one after another. Each one started a full turn that inspected its engineer
+subagent's transcript and concluded "no new report" — 177 API calls carrying
+such a note on 2026-09-15, 17.9M of the day's 116.6M tokens, most of them about
+nothing. Worse than the cost was what the agent made of the drumbeat: it read
+its own repeated "nothing new" findings as evidence that the software-engineer
+subagent had stalled or died, and reported that upward. Its transcript that
+morning holds 1459 assistant entries, 943 Bash calls and four finished reports.
+
+Three changes. The settle event now carries what settled — `subagent`,
+`durationMs`, `summary` — so the loop can tell work somebody waits on from a
+grep that will be read whenever the agent next runs: a subagent always
+qualifies, a shell task only past sixty seconds. Settles are collected for ten
+seconds and announced together, so a burst costs one turn rather than three. And
+the note itself is now four lines shorter and points at the CLI's own queued
+notification instead of demanding the work be verified where it lives — the old
+wording asked for a full audit every time, and got exactly that.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-14 — an idle reclaim stops being reported as a death
 
 Every host-side stop goes through `docker stop`, so every one of them exits 137,

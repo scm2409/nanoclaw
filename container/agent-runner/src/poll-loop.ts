@@ -633,21 +633,41 @@ export async function processQuery(
     query.push(text);
   };
 
+  // Settled background work waiting to be announced, and the timer that
+  // announces it. The wait is what makes a burst cost one turn: three SSH greps
+  // finishing seconds apart used to wake the agent three times.
+  const settledQueue: string[] = [];
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  const queueSettledTask = (summary: string): void => {
+    settledQueue.push(summary);
+    if (settleTimer) return;
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      const batch = settledQueue.splice(0, settledQueue.length);
+      // A turn that started meanwhile (a user message, a correction retry) gets
+      // the CLI's own queued notifications handed to it regardless, so there is
+      // nothing left for this note to do.
+      if (batch.length === 0 || turnActive || done || endedForCommand) return;
+      pushToQuery(buildSettledTaskNudge(batch));
+    }, settleCoalesceMs());
+  };
+
   try {
     for await (const event of query.events) {
       handleEvent(event, routing);
       touchHeartbeat();
 
-      if (event.type === 'progress') {
-        // A `progress` event is the SDK settling a background task — its
-        // statuses are terminal by definition. Mid-turn the model is handed the
-        // notification anyway and carries on; after the turn ended nothing
-        // consumes it, and the work sits unharvested until the idle ceiling
-        // reclaims the container (live on 2026-09-13: a gate finished two
-        // seconds after the closing message and the verdict was never read).
-        if (shouldNudgeSettledTask(turnActive, done || endedForCommand)) {
-          pushToQuery(buildSettledTaskNudge(event.message));
-        }
+      if (event.type === 'background-settled') {
+        // Mid-turn the model is handed the notification anyway and carries on;
+        // after the turn ended nothing consumes it, and the work sits
+        // unharvested until the idle ceiling reclaims the container (live on
+        // 2026-09-13: a gate finished two seconds after the closing message and
+        // the verdict was never read). Queue rather than push, so a burst of
+        // settles costs one turn instead of one turn each.
+        // Two checks, not one: a settle that lands mid-turn is already in front
+        // of the model and must never be queued, and a turn that starts while
+        // the batch waits makes the queued note redundant (checked at flush).
+        if (!turnActive && worthWakingFor(event)) queueSettledTask(event.summary);
       } else if (event.type === 'subagent') {
         if (logSubagents) deliverSubagentNotice(event, routing);
       } else if (event.type === 'error') {
@@ -776,6 +796,7 @@ export async function processQuery(
   } finally {
     done = true;
     clearInterval(pollHandle);
+    if (settleTimer) clearTimeout(settleTimer);
     // The turn's CLI process owns every background task it started, so when the
     // turn ends nothing of ours is in flight any more — whatever the last count
     // said. Leaving it standing would hand the next idle stretch a ceiling
@@ -1154,25 +1175,57 @@ export function shouldNudgeTaskBlocks(
 }
 
 /**
- * Should a settled background task be pushed back into the query?
- *
- * Only when no turn is running — mid-turn the CLI hands the notification to the
- * model itself, and a nudge would be a second copy of something it already has.
- * Never while the query is ending or being aborted for a command: the push
- * would either be dropped or restart a stream that is on its way out.
+ * How long settles are collected before one note goes out. Long enough that a
+ * burst of finishing tasks costs a single turn, short enough that a lone one is
+ * not left waiting.
  */
-export function shouldNudgeSettledTask(turnActive: boolean, ending: boolean): boolean {
-  return !turnActive && !ending;
+const SETTLE_COALESCE_MS = 10_000;
+let settleCoalesceOverrideMs: number | null = null;
+
+export function setSettleCoalesceMsForTesting(ms: number | null): void {
+  settleCoalesceOverrideMs = ms;
 }
 
-/** What the agent is told about work that finished after it stopped listening. */
-export function buildSettledTaskNudge(summary: string): string {
+function settleCoalesceMs(): number {
+  return settleCoalesceOverrideMs ?? SETTLE_COALESCE_MS;
+}
+
+/**
+ * Below this, a finished shell task is not worth starting a turn for: its
+ * output rides along with the next real turn either way.
+ */
+export const SETTLE_WAKE_THRESHOLD_MS = 60_000;
+
+/**
+ * Is anybody actually waiting on this settled task?
+ *
+ * Delegated subagent work always qualifies — someone asked for it and is owed
+ * the answer. A backgrounded shell command qualifies only once it has run long
+ * enough that its caller has plausibly moved on: the seconds-long SSH greps an
+ * agent fires off mid-turn are read whenever it next runs, and waking it for
+ * each one cost 177 API calls and 17.9M tokens on 2026-09-15 — turns that
+ * concluded "nothing new", which the agent then read as its subagent having
+ * died.
+ */
+export function worthWakingFor(settled: { subagent: boolean; durationMs: number }): boolean {
+  return settled.subagent || settled.durationMs >= SETTLE_WAKE_THRESHOLD_MS;
+}
+
+/**
+ * What the agent is told about work that finished after it stopped listening.
+ *
+ * Deliberately thin. The CLI queues each task's own notification — result and
+ * all — for the next turn, and this note's whole job is to make that turn
+ * happen. The first version instead asked for the work to be verified where it
+ * lives, every time, and got exactly that: long, dutiful turns about
+ * three-second greps.
+ */
+export function buildSettledTaskNudge(summaries: string[]): string {
+  const what = summaries.map((s) => escapePromptXml(s)).join('; ');
   return (
-    '<system>Background work you had delegated finished after your turn ended, so nothing has read it yet: ' +
-    `${escapePromptXml(summary)}\n` +
-    'Harvest it now where the work actually lives (files, git history, processes on the target machine) rather than ' +
-    'from the launch receipt, then say what it means for whoever was waiting on it. ' +
-    'If it changes nothing and nobody is waiting, record it and stay quiet — do not send a message just to acknowledge this.</system>'
+    `<system>Background work settled while no turn was running: ${what}. ` +
+    'Each one\'s own notification is in this turn — read that, not this line. ' +
+    'Act on what it changes; if it changes nothing, record it and stay quiet.</system>'
   );
 }
 

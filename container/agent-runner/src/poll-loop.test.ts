@@ -9,6 +9,7 @@ import {
   processQuery,
   reloadTokenUsageBaselineForTests,
   resetTokenUsageBaseline,
+  setSettleCoalesceMsForTesting,
 } from './poll-loop.js';
 import { MockProvider } from './providers/mock.js';
 import { sendMessage } from './mcp-tools/core.js';
@@ -1060,88 +1061,139 @@ describe('follow-up messages are not acked before the turn produces something', 
 
 // --- Harvesting background work that settles after the turn ------------------
 //
-// A background subagent or backgrounded Bash command settles with a
-// `task_notification`, which the provider surfaces as a `progress` event. While
-// a turn is running the model sees it and carries on — observed repeatedly in
-// live logs. After the turn has ended, nothing consumes it: on 2026-09-13 the
-// R65 emulator gate finished two seconds after KaiL's closing message, nobody
-// picked the result up, and 30 minutes later the idle ceiling reclaimed the
-// container with the verdict still unread. Pushing the notice back in starts a
-// turn that can actually harvest it.
+// A background subagent or a backgrounded Bash command settles with a
+// `task_notification`, which the CLI queues as a user message for the next turn
+// — and if the turn that delegated the work has already ended, no turn ever
+// comes. On 2026-09-13 the R65 emulator gate finished two seconds after KaiL's
+// closing message, nobody read the verdict, and 30 minutes later the idle
+// ceiling reclaimed the container. Pushing a short note in starts the turn that
+// collects the queued notification.
+//
+// The first version woke the agent for every settle, including the seconds-long
+// SSH greps it fires off mid-turn: 177 API calls and 17.9M tokens on
+// 2026-09-15, most of them turns that concluded "nothing new" — and the agent
+// took the drumbeat as evidence that its engineer subagent had died. Hence the
+// two filters here: only work somebody waits on, and one note per burst.
 
-describe('settled background work (real processQuery)', () => {
-  it('pushes a harvest nudge when a task settles after the turn ended', async () => {
-    const pushes: string[] = [];
+const SETTLE = { type: 'background-settled' as const, summary: 'the gate', subagent: false, durationMs: 600_000 };
 
-    async function* events(): AsyncGenerator<ProviderEvent> {
-      yield { type: 'init', continuation: 's1' };
-      yield { type: 'result', text: '<internal>turn done</internal>' };
-      yield { type: 'progress', message: 'Background command "run the gate" completed (exit code 0)' };
+function settleQuery(events: ProviderEvent[]): { query: AgentQuery; pushes: string[] } {
+  const pushes: string[] = [];
+  async function* gen(): AsyncGenerator<ProviderEvent> {
+    for (const e of events) {
+      yield e;
+      // Shorter than the coalescing window, so consecutive settles land in the
+      // same batch; the wait after the last event lets the timer fire.
+      await new Promise((r) => setTimeout(r, 20));
     }
-    const query: AgentQuery = {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return {
+    pushes,
+    query: {
       push: (m: string) => {
         pushes.push(m);
       },
       end: () => {},
-      events: events(),
+      events: gen(),
       abort: () => {},
-    };
+    },
+  };
+}
+
+describe('settled background work (real processQuery)', () => {
+  beforeEach(() => {
+    setSettleCoalesceMsForTesting(120);
+  });
+  afterEach(() => {
+    setSettleCoalesceMsForTesting(null);
+  });
+
+  it('nudges when long-running work settles after the turn ended', async () => {
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      { type: 'result', text: '<internal>turn done</internal>' },
+      SETTLE,
+    ]);
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
 
-    const nudges = pushes.filter((p) => p.includes('finished after your turn ended'));
+    const nudges = pushes.filter((p) => p.includes('settled while no turn was running'));
     expect(nudges).toHaveLength(1);
-    expect(nudges[0]).toContain('run the gate');
+    expect(nudges[0]).toContain('the gate');
+  });
+
+  it('nudges for a subagent however briefly it ran', async () => {
+    // Delegated work is what someone is waiting on by definition — a subagent
+    // that answers in four seconds still owes its caller the answer.
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      { type: 'result', text: '<internal>turn done</internal>' },
+      { ...SETTLE, subagent: true, summary: 'Agent "engineer" finished', durationMs: 4_000 },
+    ]);
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(pushes.filter((p) => p.includes('settled while no turn was running'))).toHaveLength(1);
+  });
+
+  it('stays quiet for a seconds-long shell task', async () => {
+    // The grep case: its output rides along with the next real turn, and waking
+    // the agent for it buys nothing but a turn that concludes "nothing new".
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      { type: 'result', text: '<internal>turn done</internal>' },
+      { ...SETTLE, summary: 'Extract log lines', durationMs: 3_000 },
+    ]);
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    expect(pushes.filter((p) => p.includes('settled while no turn was running'))).toHaveLength(0);
+  });
+
+  it('coalesces a burst into one note that names both', async () => {
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      { type: 'result', text: '<internal>turn done</internal>' },
+      { ...SETTLE, summary: 'first gate' },
+      { ...SETTLE, summary: 'second gate' },
+    ]);
+
+    await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const nudges = pushes.filter((p) => p.includes('settled while no turn was running'));
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0]).toContain('first gate');
+    expect(nudges[0]).toContain('second gate');
   });
 
   it('stays quiet while the turn is still running', async () => {
-    // Mid-turn the model is handed the notification by the CLI itself. A nudge
-    // here would be a second copy of something it already has.
-    const pushes: string[] = [];
-
-    async function* events(): AsyncGenerator<ProviderEvent> {
-      yield { type: 'init', continuation: 's1' };
-      yield { type: 'progress', message: 'Agent "engineer" finished' };
-      yield { type: 'result', text: '<internal>turn done</internal>' };
-    }
-    const query: AgentQuery = {
-      push: (m: string) => {
-        pushes.push(m);
-      },
-      end: () => {},
-      events: events(),
-      abort: () => {},
-    };
+    // Mid-turn the CLI hands the notification to the model anyway. A note here
+    // would be a second copy of something it already has.
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      SETTLE,
+      { type: 'result', text: '<internal>turn done</internal>' },
+    ]);
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
 
-    expect(pushes.filter((p) => p.includes('finished after your turn ended'))).toHaveLength(0);
+    expect(pushes.filter((p) => p.includes('settled while no turn was running'))).toHaveLength(0);
   });
 
-  it('nudges once per settled task, not once per idle event', async () => {
-    const pushes: string[] = [];
-
-    async function* events(): AsyncGenerator<ProviderEvent> {
-      yield { type: 'init', continuation: 's1' };
-      yield { type: 'result', text: '<internal>turn done</internal>' };
-      yield { type: 'progress', message: 'first task settled' };
-      // The nudge starts a turn; its result ends it again, so the second
-      // settle is nudged too — but the two settles produce two nudges, never
-      // a loop off a single one.
-      yield { type: 'result', text: '<internal>harvested one</internal>' };
-      yield { type: 'progress', message: 'second task settled' };
-    }
-    const query: AgentQuery = {
-      push: (m: string) => {
-        pushes.push(m);
-      },
-      end: () => {},
-      events: events(),
-      abort: () => {},
-    };
+  it('points at the notification instead of demanding a verification ritual', async () => {
+    // The first wording told the agent to go verify the work where it lives,
+    // every time. It dutifully did, at length, for three-second greps.
+    const { query, pushes } = settleQuery([
+      { type: 'init', continuation: 's1' },
+      { type: 'result', text: '<internal>turn done</internal>' },
+      SETTLE,
+    ]);
 
     await processQuery(query, ERR_ROUTING, ['m1'], 'claude', undefined, 'prompt', undefined);
 
-    expect(pushes.filter((p) => p.includes('finished after your turn ended'))).toHaveLength(2);
+    const nudge = pushes.find((p) => p.includes('settled while no turn was running'))!;
+    expect(nudge).toMatch(/notification/i);
+    expect(nudge.length).toBeLessThan(400);
   });
 });

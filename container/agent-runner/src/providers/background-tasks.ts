@@ -22,39 +22,83 @@ export interface TaskLifecycleMessage {
   subtype?: string;
   task_id?: string;
   status?: string;
+  summary?: string;
+  description?: string;
+  subagent_type?: string;
+  task_type?: string;
+  usage?: { duration_ms?: number };
   patch?: { status?: string };
+}
+
+/** What a settled task was, for callers deciding whether it is worth reacting to. */
+export interface SettledTask {
+  summary: string;
+  /** True for Task-tool subagents; false for shell and other background tasks. */
+  subagent: boolean;
+  durationMs: number;
+}
+
+export interface TaskChange {
+  outstanding: number;
+  /** Present when this change was a task settling, absent when one started. */
+  settled?: SettledTask;
 }
 
 const TERMINAL_STATUS = new Set(['completed', 'failed', 'stopped', 'killed']);
 
+interface LiveTask {
+  startedAtMs: number;
+  subagent: boolean;
+  description: string;
+}
+
 export class BackgroundTaskTracker {
-  private readonly live = new Set<string>();
+  private readonly live = new Map<string, LiveTask>();
 
   get outstanding(): number {
     return this.live.size;
   }
 
   /**
-   * Feed one SDK message. Returns the new outstanding count when it changed,
-   * or null when the message says nothing about background work — so the
-   * caller can report a change without re-announcing an unchanged count.
+   * Feed one SDK message. Returns the new outstanding count when it changed —
+   * plus what settled, when the change was a settle — or null when the message
+   * says nothing about background work, so the caller can report a change
+   * without re-announcing an unchanged count.
+   *
+   * `nowMs` exists so duration is testable; it defaults to the wall clock.
    */
-  observe(message: TaskLifecycleMessage): number | null {
+  observe(message: TaskLifecycleMessage, nowMs: number = Date.now()): TaskChange | null {
     if (message.type !== 'system') return null;
     const id = message.task_id;
     if (!id) return null;
 
     if (message.subtype === 'task_started') {
       if (this.live.has(id)) return null;
-      this.live.add(id);
-      return this.live.size;
+      this.live.set(id, {
+        startedAtMs: nowMs,
+        subagent: Boolean(message.subagent_type),
+        description: message.description ?? '',
+      });
+      return { outstanding: this.live.size };
     }
 
-    const settled =
+    const isSettle =
       (message.subtype === 'task_notification' && TERMINAL_STATUS.has(message.status ?? '')) ||
       (message.subtype === 'task_updated' && TERMINAL_STATUS.has(message.patch?.status ?? ''));
-    if (!settled) return null;
-    if (!this.live.delete(id)) return null;
-    return this.live.size;
+    if (!isSettle) return null;
+    const task = this.live.get(id);
+    if (!task) return null;
+    this.live.delete(id);
+
+    return {
+      outstanding: this.live.size,
+      settled: {
+        // The SDK's own duration is authoritative when it reports one: it
+        // measures the task, while our clock only measures what we saw of it.
+        durationMs: message.usage?.duration_ms ?? nowMs - task.startedAtMs,
+        subagent: task.subagent,
+        summary: message.summary || task.description || 'a background task',
+      },
+    };
   }
 }

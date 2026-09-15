@@ -1079,9 +1079,14 @@ export class ClaudeProvider implements AgentProvider {
         yield { type: 'activity' };
 
         // Report the count only when it moves — the host reads it as "is there
-        // still something in flight", not as a stream of ticks.
-        const outstanding = backgroundTasks.observe(message as TaskLifecycleMessage);
-        if (outstanding !== null) yield { type: 'background-tasks', outstanding };
+        // still something in flight", not as a stream of ticks. A settle also
+        // says what it was, which is what decides whether it is worth waking a
+        // finished turn for.
+        const taskChange = backgroundTasks.observe(message as TaskLifecycleMessage);
+        if (taskChange) {
+          yield { type: 'background-tasks', outstanding: taskChange.outstanding };
+          if (taskChange.settled) yield { type: 'background-settled', ...taskChange.settled };
+        }
 
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };

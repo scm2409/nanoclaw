@@ -199,6 +199,13 @@ export type ProviderEvent =
    */
   | { type: 'background-tasks'; outstanding: number }
   /**
+   * One background task settled. Carries what it was, so the poll loop can tell
+   * work somebody is waiting on (a delegated subagent, a long-running command)
+   * from the seconds-long shell task an agent fires off mid-turn and reads
+   * whenever it next runs.
+   */
+  | { type: 'background-settled'; summary: string; subagent: boolean; durationMs: number }
+  /**
    * A tool the agent invoked, and what it got back. These exist so the
    * container log records what the agent actually *did*, independently of
    * what it later says it did.
