@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-15 — the agent learns that a repeated completion notice is not a corpse
+
+A task notification fires every time an agent stops with no live background
+children of its own, and since the agent can be handed more work with
+`SendMessage`, the same agent notifies again for every stretch it does — each
+time carrying the description it was *launched* under. KaiL got twelve notices
+reading `Agent "r71: Recovery-Persistenz + Sender-Sync + ein Gate" finished` for
+an engineer that had long since moved on to r75 and r76, and concluded it had
+stalled or died. It had 1459 transcript entries, 943 shell calls and four
+finished reports behind it that morning.
+
+The standing delegation rules now say so: read the result body, never the label;
+a repeated notice means the agent stopped, which is what it does between orders;
+check the work itself before telling Martin an agent is idle. The same rule set
+also explains the settle note the poll loop pushes, so it is not mistaken for a
+request to investigate.
+
+While there, the container-death paragraph was corrected. It still claimed every
+such note means delegated work is gone — true of one of the two notes since
+yesterday, and the opposite of what the idle-reclaim note says.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-15 — long-running work is anchored on its Deck card, not in the chat
 
 KaiL's own standing instructions, written under Martin's direction: a long-running

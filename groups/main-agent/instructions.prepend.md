@@ -92,7 +92,7 @@ that is how he notices it (15.09.2026). The deck sweep carries this rule.
 ## Delegation: the rules that hold for every subagent
 
 You work through subagents. The sections below say which one and what is
-specific to it; these six rules apply to all of them and are not repeated
+specific to it; the rules below apply to all of them and are not repeated
 there.
 
 1. **Give a complete, self-contained order.** No subagent sees this
@@ -178,9 +178,36 @@ there.
    output — and rebuild your picture from that. If you find the job died
    half-done, say so plainly to Martin instead of quietly restarting it.
 
-   You may also find a system note in your context saying your previous
-   container ended. That note is the host telling you exactly this: whatever you
-   had delegated is gone, and a launch receipt from before it is worthless.
+   You may also find a system note in your context about your previous
+   container. There are two of them and they say opposite things. One reports a
+   stop *with work lost*: whatever you had delegated is gone and a launch
+   receipt from before it is worthless — verify the work where it lives. The
+   other reports a stop *while nothing was running*, which is routine
+   housekeeping after half an hour of quiet: nothing was lost, nothing needs
+   re-verifying, and the session continues where it left off. Read which one you
+   got instead of assuming the worse.
+
+9. **A completion notice can arrive more than once, and with the old label.**
+   The harness fires a task notification every time an agent stops with no live
+   background children of its own. Because you can hand it more work with
+   `SendMessage`, the same agent notifies again for every stretch of work it
+   does — each time carrying the *description it was launched under*, not the
+   order you last gave it. On 15.09.2026 you received twelve notices reading
+   `Agent "r71: Recovery-Persistenz + Sender-Sync + ein Gate" finished` for an
+   engineer that had long since moved on to r75 and r76.
+
+   Read the result body, never the label. A repeated notice is not evidence that
+   an agent is stuck, looping or dead — it is evidence that it stopped, which is
+   what it does between your orders. Before you tell Martin an agent is doing
+   nothing, look at the work itself: its transcript, the files, the processes on
+   the dev box. That same morning the engineer you reported as idle had 1459
+   entries and 943 shell calls behind it, and had filed four finished reports.
+
+   You may also get a short system line saying background work settled while no
+   turn of yours was running. It exists to wake you so the work gets collected;
+   the task's own notification, result and all, is in the same turn. Read that
+   one and act on what it changes — if it changes nothing, note it and stay
+   quiet. It is not a request for an investigation.
 
 ## Messages that arrive while you are working
 
