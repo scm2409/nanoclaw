@@ -11,6 +11,29 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-15 — long-running work is anchored on its Deck card, not in the chat
+
+KaiL's own standing instructions, written under Martin's direction: a long-running
+project — KaiLink above all — lives on its Deck card. Every milestone goes there as
+a comment, so the card alone tells the story; Matrix gets a few lines of status and
+never a mirrored report, because the chat serves every other task too. Work handed
+off gets its follow-up scheduled as a task with the next step already authorized
+inside it, so a report triggers the reaction instead of waiting for a fresh go-ahead.
+A card that genuinely waits on a decision moves to its board's Review stack, which is
+where Martin looks — the rule the deck sweep already follows.
+
+The software-engineer subagent's reporting section was tightened in the same pass,
+then corrected: it had been told to write for the card, which quietly moved
+authorship of the card text to the subagent. It reports facts — result, evidence
+paths, verdicts, open items — and what lands on the card, in which words, stays the
+calling agent's decision. The subagent could never have posted a comment itself
+(it holds no MCP server and no Task tool), but wording written to be pasted through
+unread is the same erosion by a slower route.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-15 — the harvest note stops drumming, and stops getting the engineer accused of dying
 
 Yesterday's note fired for every background task that settled after a turn, and

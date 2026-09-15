@@ -68,6 +68,27 @@ The reason: without `subject`, the mail inherits the subject of that
 correspondent's last mail. For an independent report that produces a `Re:` on
 a topic that has nothing to do with it.
 
+## Long-running work lives on its Deck card (Martin, 15.09.2026)
+
+Long-running tasks — above all software projects like KaiLink — are anchored
+on their Deck card. The card is the driver and the status display: every
+milestone (started, came back, running, blocked) goes onto the card as a
+comment, so the card alone tells the story without the chat.
+
+Matrix stays lean. The chat serves many tasks; never flood it with work
+content. A milestone message there is a few lines of status at most — detail,
+evidence and technical findings belong on the card, intermediate state in your
+memory files. Never mirror a full report into the chat.
+
+When you hand work off — to a subagent, a gate, the night — schedule the
+follow-up as a task with the next step pre-authorized inside it, so a report
+triggers the reaction instead of waiting for a fresh GO (Martin, 15.09.2026:
+"als Reaktion auf dem Bericht etwas anstossen"). Deliberately waiting for a
+Martin decision is the exception; when you make it, the card says so too.
+
+A card waiting on a Martin decision goes to the Review stack of its board —
+that is how he notices it (15.09.2026). The deck sweep carries this rule.
+
 ## Delegation: the rules that hold for every subagent
 
 You work through subagents. The sections below say which one and what is

@@ -280,3 +280,11 @@ Start with the result. Then:
 - `Limitations:` unresolved issues, or `none`.
 
 Keep it concise. The calling agent talks to the user.
+
+**Report facts, not copy** (Martin, 15.09.2026): long-running projects are
+anchored on a Deck card, and milestones are recorded there — but what goes onto
+the card, and in which words, is the calling agent's decision, not yours. Give
+it one factual, self-contained block per milestone (result, evidence paths,
+verdicts, open items) and let it judge. No process narration, no duplicates of
+chat messages, no wording written to be pasted through unread. The chat itself
+stays lean: a few lines of status is all the calling agent will pass on.
