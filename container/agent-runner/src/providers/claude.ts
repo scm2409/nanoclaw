@@ -11,6 +11,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import { findByName } from '../destinations.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { TIMEZONE, formatLocalStamp } from '../timezone.js';
 import { BackgroundTaskTracker, type TaskLifecycleMessage } from './background-tasks.js';
@@ -609,6 +610,37 @@ function forceBackgroundAgent(toolName: string, toolInput: Record<string, unknow
   };
 }
 
+/**
+ * `SendMessage` reaches subagents; a person is reached with the MCP
+ * `send_message` tool, whose targets are the agent's delivery destinations.
+ * Confusing the two loses the message, quietly: on 2026-09-15 KaiL sent Martin a
+ * decisive diagnostic finding with `SendMessage`, got back "No agent named
+ * 'matrix-mg-17844' is currently addressable", did not retry, and the finding
+ * was simply gone. The generic error said what was not found; it never said
+ * which tool would have worked.
+ *
+ * Blocking rather than silently re-routing: the text was composed for a person,
+ * but the call was not, and delivering it through a path the agent did not ask
+ * for would be a worse surprise than a refusal that names the right tool.
+ *
+ * `isDeliveryDestination` is injected so the rule is testable without a DB.
+ */
+export function misdirectedSendMessage(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  isDeliveryDestination: (name: string) => boolean,
+): string | null {
+  if (toolName !== 'SendMessage') return null;
+  const raw = toolInput?.to ?? toolInput?.recipient;
+  if (typeof raw !== 'string' || !raw) return null;
+  if (!isDeliveryDestination(raw)) return null;
+  return (
+    `'${raw}' is one of your delivery destinations, not an agent — SendMessage only reaches subagents, ` +
+    `so this message would go nowhere. Send it with the send_message tool instead (to: "${raw}"). ` +
+    'Nothing has been delivered yet.'
+  );
+}
+
 export const preToolUseHook: HookCallback = async (input) => {
   const i = input as { tool_name?: string; tool_input?: Record<string, unknown> };
   const toolName = i.tool_name ?? '';
@@ -627,6 +659,20 @@ export const preToolUseHook: HookCallback = async (input) => {
   } catch (err) {
     log(`PreToolUse: failed to record container_state: ${err instanceof Error ? err.message : String(err)}`);
   }
+  const misdirected = misdirectedSendMessage(toolName, i.tool_input, (name) => {
+    try {
+      return findByName(name) !== undefined;
+    } catch {
+      // No destinations table (older session DB, tests without one): the rule
+      // cannot fire, and a delivery mistake is better than a wrong refusal.
+      return false;
+    }
+  });
+  if (misdirected) {
+    log(`PreToolUse: blocked misdirected SendMessage — ${misdirected}`);
+    return { decision: 'block', stopReason: misdirected } as unknown as ReturnType<HookCallback>;
+  }
+
   const background = forceBackgroundAgent(toolName, i.tool_input);
   if (background) return { continue: true, ...background } as unknown as ReturnType<HookCallback>;
   return { continue: true };

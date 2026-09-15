@@ -11,6 +11,27 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-15 — a message for a person sent to the subagent channel is refused, not swallowed
+
+`SendMessage` reaches subagents. A person is reached with the MCP `send_message`
+tool, whose targets are the agent's delivery destinations. Nothing stopped the
+two from being confused, and on 2026-09-15 KaiL sent Martin a decisive r74
+diagnostic finding through `SendMessage`. The CLI answered "No agent named
+'matrix-mg-17844' is currently addressable" — true, unhelpful, and silent about
+which tool would have worked. No retry followed; the finding was simply gone.
+
+The pre-tool-use hook now checks a `SendMessage` target against the destinations
+table and blocks the call when it names one, saying which tool to use, with the
+destination name filled in, and that nothing has been delivered. Blocking rather
+than re-routing: the text was written for a person but the call was not, and
+delivering it down a path the agent never asked for is a worse surprise than a
+refusal that points at the right door. Where no destinations table exists, the
+rule cannot fire — a missed mistake beats a wrong refusal.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-15 — pre-authorization stops where Martin's decisions begin
 
 The Deck-card rules let KaiL pre-authorize the next step of its own work inside a
