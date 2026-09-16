@@ -226,6 +226,12 @@ export interface ContainerState {
    * when the container last vouched for the count.
    */
   background_tasks?: number | null;
+  /**
+   * Subagents this container has started. Never decremented: a stopped subagent
+   * stays resumable until the container ends, and then it is gone like any
+   * running one — which is exactly what a reclaim note needs to know.
+   */
+  subagent_handles?: number | null;
   updated_at?: string | null;
 }
 
@@ -240,7 +246,7 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
     const row = outDb
       .prepare(
         `SELECT current_tool, tool_declared_timeout_ms, tool_started_at,
-                background_tasks, updated_at
+                background_tasks, subagent_handles, updated_at
            FROM container_state WHERE id = 1`,
       )
       .get() as ContainerState | undefined;

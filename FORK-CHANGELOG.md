@@ -11,6 +11,37 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-16 — "nothing was running" stops being told as "nothing was lost"
+
+The idle-reclaim note introduced on 14.09 reassured the agent that no subagent
+had been lost. It meant work in flight, and for work in flight it was true. A
+subagent that has stopped is not in flight — and it is still resumable, until
+its container ends. On 15.09 the r79 engineer stopped normally after launching
+an OpenCode run on the dev box, its container was reclaimed 30 minutes later
+with nothing outstanding, and the note told KaiL nothing had been lost. Two
+hours later its watchdog reported the engineer as having died without a report.
+Nothing had been running; something had still gone.
+
+The container now counts the subagents it starts — any kind, since the
+mechanism has nothing to do with which one — and the count resets per container
+run, because `outbound.db` belongs to the session and outlives every container
+in it. When a reclaim finds that count above zero, the note says so: the handles
+went with the container, none of them can be resumed or will ever report back,
+and work running elsewhere — a build, a gate, anything started over SSH — is
+untouched and should be checked where it lives. With no subagents started, the
+plain reassurance stands.
+
+The standing rules gain the same fact from the agent's side: a handle lives as
+long as its container, a container quiet for half an hour is reclaimed as
+routine, and a handle never crosses into a scheduled task's own session. So a
+plan must never depend on resuming a particular agent later; the harvest is
+anchored in the work — run directory, log, commit, process on the other machine
+— which whoever picks it up can read, including a fresh subagent.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-15 — a message for a person sent to the subagent channel is refused, not swallowed
 
 `SendMessage` reaches subagents. A person is reached with the MCP `send_message`

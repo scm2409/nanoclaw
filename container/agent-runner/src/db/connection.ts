@@ -113,6 +113,7 @@ export function getOutboundDb(): Database {
         tool_declared_timeout_ms INTEGER,
         tool_started_at          TEXT,
         background_tasks         INTEGER NOT NULL DEFAULT 0,
+        subagent_handles         INTEGER NOT NULL DEFAULT 0,
         updated_at               TEXT NOT NULL
       );
     `);
@@ -121,6 +122,9 @@ export function getOutboundDb(): Database {
     );
     if (!stateCols.has('background_tasks')) {
       _outbound.exec(`ALTER TABLE container_state ADD COLUMN background_tasks INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!stateCols.has('subagent_handles')) {
+      _outbound.exec(`ALTER TABLE container_state ADD COLUMN subagent_handles INTEGER NOT NULL DEFAULT 0`);
     }
   }
   return _outbound;
@@ -195,6 +199,54 @@ export function setBackgroundTasks(count: number): void {
 export function refreshBackgroundTasks(): void {
   if (_backgroundTasks <= 0) return;
   setBackgroundTasks(_backgroundTasks);
+}
+
+/**
+ * Record that this container started a subagent.
+ *
+ * A subagent lives in the CLI process inside the container, and it stays
+ * resumable long after it has stopped — until the container goes, taking every
+ * handle with it. The host cannot see subagents at all, so it cannot tell a
+ * reclaim that lost nothing from one that quietly killed a delegation the agent
+ * still meant to resume. On 2026-09-15 it told KaiL nothing had been lost while
+ * the r79 engineer's handle died with the container; two hours later KaiL
+ * reported that engineer as dead for no reason.
+ *
+ * Counted, never decremented: a stopped agent is exactly as lost as a running
+ * one, and that is the point of the number.
+ */
+export function noteSubagentHandle(): void {
+  const now = new Date().toISOString();
+  getOutboundDb()
+    .prepare(
+      `INSERT INTO container_state (id, subagent_handles, updated_at)
+       VALUES (1, 1, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         subagent_handles = subagent_handles + 1,
+         updated_at = excluded.updated_at`,
+    )
+    .run(now);
+}
+
+/**
+ * Clear the counters that describe *this* container run. `outbound.db` belongs
+ * to the session and outlives every container in it, so without this a fresh
+ * container inherits a dead one's numbers — and the next reclaim note reports
+ * handles that were already gone.
+ */
+export function resetContainerRunState(): void {
+  _backgroundTasks = 0;
+  const now = new Date().toISOString();
+  getOutboundDb()
+    .prepare(
+      `INSERT INTO container_state (id, background_tasks, subagent_handles, updated_at)
+       VALUES (1, 0, 0, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         background_tasks = 0,
+         subagent_handles = 0,
+         updated_at = excluded.updated_at`,
+    )
+    .run(now);
 }
 
 /**
@@ -297,6 +349,7 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
       tool_declared_timeout_ms INTEGER,
       tool_started_at          TEXT,
       background_tasks         INTEGER NOT NULL DEFAULT 0,
+      subagent_handles         INTEGER NOT NULL DEFAULT 0,
       updated_at               TEXT NOT NULL
     );
   `);

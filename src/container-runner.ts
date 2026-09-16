@@ -226,10 +226,12 @@ async function spawnContainer(session: Session): Promise<void> {
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     containerLog?.close(`exited code=${code}`);
+    const runState = readContainerRunState(session.agent_group_id, session.id);
+    const subagentHandles = runState.subagentHandles ?? 0;
     const exitKind = classifyContainerExit({
       code,
       killReason,
-      backgroundTasks: readBackgroundTasks(session.agent_group_id, session.id),
+      backgroundTasks: runState.backgroundTasks,
     });
     if (exitKind !== 'silent') {
       // trigger 0: this must not wake anyone by itself. It is context for the
@@ -247,7 +249,7 @@ async function spawnContainer(session: Session): Promise<void> {
           content: JSON.stringify({
             text:
               exitKind === 'idle-reclaim'
-                ? containerIdleNote(new Date())
+                ? containerIdleNote(new Date(), subagentHandles)
                 : containerExitNote(code as number, new Date()),
             sender: 'system',
             senderId: 'system',
@@ -329,13 +331,34 @@ export function classifyContainerExit(args: {
   return 'lost-work';
 }
 
-/** What the next turn is told about a container that was reclaimed while idle. */
-export function containerIdleNote(at: Date): string {
-  return [
+/**
+ * What the next turn is told about a container that was reclaimed while idle.
+ *
+ * "Nothing was running" and "nothing was lost" are not the same sentence. A
+ * subagent that has stopped is not running, but it stays resumable until its
+ * container ends — and then the handle is gone. Saying nothing was lost cost a
+ * real diagnosis on 2026-09-15: the r79 engineer's handle died in a reclaim,
+ * the note reassured KaiL that no subagent had been lost, and two hours later
+ * it reported that engineer as dead for no reason.
+ */
+export function containerIdleNote(at: Date, subagentHandles: number): string {
+  const opening = [
     `System note: your previous container was stopped at ${formatLocalTime(at.toISOString(), TIMEZONE)}`,
     'because nothing had happened in it for half an hour. Routine housekeeping, not a failure:',
-    'nothing of yours was running at the time, no subagent or background command was lost,',
-    'and this session resumes exactly where it left off. Nothing needs to be re-verified or re-reported.',
+    'nothing of yours was running at the time,',
+  ].join(' ');
+
+  if (subagentHandles <= 0) {
+    return `${opening} no subagent or background command was lost, and this session resumes exactly where it left off. Nothing needs to be re-verified or re-reported.`;
+  }
+
+  return [
+    opening,
+    `but the ${subagentHandles} subagent${subagentHandles === 1 ? '' : 's'} you started in it went with it —`,
+    'a handle lives exactly as long as its container, so none of them can be resumed or will ever report back,',
+    'however long you wait. Work running elsewhere is untouched: a build, a gate or anything started over SSH on',
+    'another machine keeps going, so check the work where it lives and start a fresh subagent if you still need one.',
+    'This session itself resumes exactly where it left off.',
   ].join(' ');
 }
 
@@ -352,19 +375,26 @@ export function containerExitNote(code: number, at: Date): string {
 }
 
 /**
- * The container's last word on how much background work it had in flight. Read
- * from its outbound DB after it has exited, so nothing is competing for the
- * file. Returns null when the report cannot be read — which the classifier
- * treats as "unknown", never as "nothing was running".
+ * The container's last word on what it was carrying: background work in flight,
+ * and how many subagent handles it had opened. Read from its outbound DB after
+ * it has exited, so nothing is competing for the file. Nulls mean "could not
+ * read" — which the classifier treats as unknown, never as "nothing was
+ * running".
  */
-function readBackgroundTasks(agentGroupId: string, sessionId: string): number | null {
+function readContainerRunState(
+  agentGroupId: string,
+  sessionId: string,
+): { backgroundTasks: number | null; subagentHandles: number | null } {
   let db: Database.Database | undefined;
   try {
     db = openOutboundDb(agentGroupId, sessionId);
     const state = getContainerState(db);
-    return typeof state?.background_tasks === 'number' ? state.background_tasks : null;
+    return {
+      backgroundTasks: typeof state?.background_tasks === 'number' ? state.background_tasks : null,
+      subagentHandles: typeof state?.subagent_handles === 'number' ? state.subagent_handles : null,
+    };
   } catch {
-    return null;
+    return { backgroundTasks: null, subagentHandles: null };
   } finally {
     db?.close();
   }

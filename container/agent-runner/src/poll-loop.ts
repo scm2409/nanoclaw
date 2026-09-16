@@ -9,7 +9,9 @@ import {
 import { writeMessageOut } from './db/messages-out.js';
 import {
   getInboundDb,
+  noteSubagentHandle,
   refreshBackgroundTasks,
+  resetContainerRunState,
   setBackgroundTasks,
   touchHeartbeat,
   clearStaleProcessingAcks,
@@ -195,6 +197,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // Clear leftover 'processing' acks from a previous crashed container.
   // This lets the new container re-process those messages.
   clearStaleProcessingAcks();
+  // Same idea for the counters describing a container run: they live in the
+  // session's DB, not in the container, so a fresh one must start from zero.
+  resetContainerRunState();
 
   let pollCount = 0;
   let isFirstPoll = true;
@@ -860,6 +865,15 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
       break;
     case 'subagent':
       log(`Subagent started: ${event.subagentType} (model: ${event.model})`);
+      // Count the handle for the host. It cannot see subagents, and a stopped
+      // one stays resumable until this container ends — at which point it is as
+      // lost as a running one, which is what a reclaim note has to be able to
+      // say.
+      try {
+        noteSubagentHandle();
+      } catch (err) {
+        log(`Could not record subagent handle: ${err instanceof Error ? err.message : String(err)}`);
+      }
       break;
     case 'background-tasks':
       // Tell the host what is still running for us. It cannot see inside the

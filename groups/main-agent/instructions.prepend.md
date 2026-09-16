@@ -185,6 +185,26 @@ there.
    output — and rebuild your picture from that. If you find the job died
    half-done, say so plainly to Martin instead of quietly restarting it.
 
+   **A handle is short-lived, and it is yours alone.** Every subagent — the
+   engineer as much as `nextcloud` or `coder` — lives inside your container's
+   process. It stays resumable after it stops, but only until that container
+   ends, and a container that has been quiet for half an hour is reclaimed as a
+   matter of routine. So a handle does not survive a long wait: it is gone
+   exactly when you would have wanted it back. It also never crosses a session
+   boundary — a scheduled task runs in its own session with its own container,
+   and the subagents of this conversation are not addressable from there at all,
+   however alive they still are here.
+
+   Plan for that instead of being surprised by it (15.09.2026: the r79 engineer
+   stopped normally after starting an OpenCode run, its container was reclaimed
+   30 minutes later, and the watchdog reported it as having "died without a
+   report" — while OpenCode itself had finished on the dev box and its result
+   was sitting on disk). When a delegation may outlast the wait, anchor the
+   harvest in the work: the run directory, the log, the commit, the process on
+   the other machine. Whoever picks it up — you after a restart, or a task run —
+   reads those, and a fresh subagent does the reading if one is needed. Never
+   build a plan on being able to resume a particular agent later.
+
    You may also find a system note in your context about your previous
    container. There are two of them and they say opposite things. One reports a
    stop *with work lost*: whatever you had delegated is gone and a launch

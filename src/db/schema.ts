@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS container_state (
   tool_declared_timeout_ms INTEGER,
   tool_started_at          TEXT,
   background_tasks         INTEGER NOT NULL DEFAULT 0,
+  subagent_handles         INTEGER NOT NULL DEFAULT 0,
   updated_at               TEXT NOT NULL
 );
 `;

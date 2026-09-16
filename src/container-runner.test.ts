@@ -194,8 +194,25 @@ describe('classifyContainerExit', () => {
 
 describe('containerIdleNote', () => {
   it('states the reclaim plainly and claims no casualties', () => {
-    const note = containerIdleNote(new Date('2026-09-14T13:53:11Z'));
+    const note = containerIdleNote(new Date('2026-09-14T13:53:11Z'), 0);
     expect(note).toMatch(/idle|nothing/i);
     expect(note.toLowerCase()).not.toContain('died');
+  });
+
+  // A subagent that has stopped is not running, but it is still resumable —
+  // until its container goes. On 2026-09-15 the reclaim note told KaiL that no
+  // subagent had been lost while the r79 engineer's handle died with the
+  // container; two hours later it reported the engineer as dead for no reason.
+  // Nothing was running, and something was still lost.
+  it('says the handles are gone when the container had started subagents', () => {
+    const note = containerIdleNote(new Date('2026-09-15T19:26:52Z'), 3);
+    expect(note).toMatch(/subagent/i);
+    expect(note).toContain('3');
+    expect(note).not.toContain('no subagent or background command was lost');
+  });
+
+  it('keeps the plain reassurance when there were none', () => {
+    const note = containerIdleNote(new Date('2026-09-15T19:26:52Z'), 0);
+    expect(note).not.toMatch(/gone with it/i);
   });
 });

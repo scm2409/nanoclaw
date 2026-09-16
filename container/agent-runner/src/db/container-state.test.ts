@@ -4,7 +4,9 @@ import {
   clearContainerToolInFlight,
   getOutboundDb,
   initTestSessionDb,
+  noteSubagentHandle,
   refreshBackgroundTasks,
+  resetContainerRunState,
   setBackgroundTasks,
   setContainerToolInFlight,
 } from './connection.js';
@@ -13,10 +15,20 @@ beforeEach(() => {
   initTestSessionDb();
 });
 
-function readState(): { background_tasks: number | null; updated_at: string; current_tool: string | null } {
+function readState(): {
+  background_tasks: number | null;
+  subagent_handles: number | null;
+  updated_at: string;
+  current_tool: string | null;
+} {
   return getOutboundDb()
-    .prepare('SELECT background_tasks, updated_at, current_tool FROM container_state WHERE id = 1')
-    .get() as { background_tasks: number | null; updated_at: string; current_tool: string | null };
+    .prepare('SELECT background_tasks, subagent_handles, updated_at, current_tool FROM container_state WHERE id = 1')
+    .get() as {
+    background_tasks: number | null;
+    subagent_handles: number | null;
+    updated_at: string;
+    current_tool: string | null;
+  };
 }
 
 describe('container_state — background tasks', () => {
@@ -54,5 +66,35 @@ describe('container_state — background tasks', () => {
     const after = readState();
     expect(after.background_tasks).toBe(3);
     expect(after.current_tool).toBeNull();
+  });
+});
+
+// A subagent handle lives exactly as long as the container holding it. The host
+// cannot see subagents, so the container counts the ones it started; that count
+// is what lets a reclaim note say whether anything resumable died with it.
+describe('container_state — subagent handles', () => {
+  test('counts every subagent started in this container', () => {
+    noteSubagentHandle();
+    noteSubagentHandle();
+    expect(readState().subagent_handles).toBe(2);
+  });
+
+  test('a fresh container run starts from zero', () => {
+    // The row outlives the container it describes — outbound.db belongs to the
+    // session. Without a reset the next container inherits a dead container's
+    // handles and the note lies in the other direction.
+    noteSubagentHandle();
+    setBackgroundTasks(2);
+    resetContainerRunState();
+    const after = readState();
+    expect(after.subagent_handles).toBe(0);
+    expect(after.background_tasks).toBe(0);
+  });
+
+  test('tool bookkeeping leaves the handle count alone', () => {
+    noteSubagentHandle();
+    setContainerToolInFlight('Bash', 1000);
+    clearContainerToolInFlight();
+    expect(readState().subagent_handles).toBe(1);
   });
 });
