@@ -278,6 +278,13 @@ async function sweepSession(session: Session): Promise<void> {
 
     const alive = isContainerRunning(session.id);
 
+    // 2b. Refresh last_active from the heartbeat. A container that polls
+    // without producing a model turn is alive, and the column must say so.
+    const liveStamp = nextLastActive(session.last_active, heartbeatMtimeMs(agentGroup.id, session.id));
+    if (liveStamp) {
+      updateSession(session.id, { last_active: liveStamp });
+    }
+
     // 3. Running-container SLA: absolute ceiling + per-claim stuck rules.
     // Skip on the same iteration that just woke the container — it hasn't
     // had a chance to clear stale processing_ack rows from a previous crash
@@ -322,6 +329,30 @@ async function sweepSession(session: Session): Promise<void> {
     inDb.close();
     outDb?.close();
   }
+}
+
+/**
+ * Keep `sessions.last_active` honest as a liveness signal.
+ *
+ * It used to move only when the host wrote an inbound row or spawned a
+ * container. A container that stays up and polls — the normal state for a
+ * scheduled series whose pre-task gate keeps answering `wakeAgent: false` —
+ * therefore froze at the timestamp of its last model turn, and `ncl sessions
+ * list` showed a live session as hours idle. Both the agent and its watchdog
+ * read that column to decide whether a chain had died, so a frozen value made
+ * them declare a healthy session dead and take over work nobody had dropped.
+ *
+ * The heartbeat file is the real liveness signal (see the module header), so
+ * fold it in here. Returns the stamp to write, or null when there is nothing
+ * newer to record — no heartbeat file, or the column is already ahead of it.
+ */
+export function nextLastActive(current: string | null, heartbeatMs: number): string | null {
+  if (!heartbeatMs) return null;
+  if (current !== null) {
+    const recorded = Date.parse(current);
+    if (!Number.isNaN(recorded) && recorded >= heartbeatMs) return null;
+  }
+  return new Date(heartbeatMs).toISOString();
 }
 
 function heartbeatMtimeMs(agentGroupId: string, sessionId: string): number {

@@ -14,6 +14,7 @@ import {
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
   parseSqliteUtc,
+  nextLastActive,
   shouldCloseTaskSession,
 } from './host-sweep.js';
 import type { Session } from './types.js';
@@ -473,5 +474,31 @@ describe('shouldCloseTaskSession', () => {
   it('never touches non-task sessions', () => {
     expect(shouldCloseTaskSession('telegram:12345', false, 0)).toBe(false);
     expect(shouldCloseTaskSession(null, false, 0)).toBe(false);
+  });
+});
+
+describe('nextLastActive — heartbeat liveness', () => {
+  const HB = Date.parse('2026-09-18T13:00:00.000Z');
+
+  it('returns the heartbeat stamp when it is newer than the recorded value', () => {
+    expect(nextLastActive('2026-09-18T09:20:20.249Z', HB)).toBe('2026-09-18T13:00:00.000Z');
+  });
+
+  it('returns null when the recorded value is already at or past the heartbeat', () => {
+    expect(nextLastActive('2026-09-18T13:00:00.000Z', HB)).toBeNull();
+    expect(nextLastActive('2026-09-18T13:05:00.000Z', HB)).toBeNull();
+  });
+
+  it('returns the heartbeat stamp when nothing was ever recorded', () => {
+    expect(nextLastActive(null, HB)).toBe('2026-09-18T13:00:00.000Z');
+  });
+
+  it('returns null when there is no heartbeat file', () => {
+    expect(nextLastActive('2026-09-18T09:20:20.249Z', 0)).toBeNull();
+    expect(nextLastActive(null, 0)).toBeNull();
+  });
+
+  it('returns the heartbeat stamp when the recorded value is unparseable', () => {
+    expect(nextLastActive('not-a-date', HB)).toBe('2026-09-18T13:00:00.000Z');
   });
 });

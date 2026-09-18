@@ -39,7 +39,12 @@ registerResource({
         '"running" — container alive and polling. "stopped" — container exited; the sweep will restart it automatically when due messages arrive. "idle" — reserved, currently unused.',
       enum: ['running', 'idle', 'stopped'],
     },
-    { name: 'last_active', type: 'string', description: 'Last message or heartbeat. Used for stale detection.' },
+    {
+      name: 'last_active',
+      type: 'string',
+      description:
+        'Liveness, refreshed every sweep from the container heartbeat — not "time of last model turn". A container that polls quietly (e.g. a scheduled series whose gate keeps declining to wake the agent) keeps this fresh. Judge whether a session is dead from this together with container_status, never from how long ago it last produced output.',
+    },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   operations: { list: 'open', get: 'open' },

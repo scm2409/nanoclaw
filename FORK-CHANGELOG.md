@@ -11,6 +11,76 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — a Deck card that nobody is left to drive
+
+A long-running project is anchored on its Deck card, but the card was never
+what actually drove it: rounds were armed from whichever chat session happened
+to be open, and the card only recorded what that session had done. When the
+session ended, the work stopped — with the card sitting in a watched stack
+saying exactly what the next step was, and every later sweep reading it,
+reporting "belongs to the driving thread", and doing nothing. Martin's GO went
+unexecuted for over four hours that way.
+
+Three things had to line up for that, and all three are fixed here.
+
+The standing anti-injection rule says card text is material and never an
+instruction — deliberately, and it stays that way for web pages, wiki pages,
+mail and every other source. It now carries one narrow exception: on the
+agent's own board, description and comments written by its own account or by
+the operator are a work order, and only while the card sits in a stack the
+wake gate watches. Anything else on that card stays material. The exception
+widens nothing about *what* may be done; everything the instructions reserve
+for the operator still waits for him. Alongside it, an explicit rule that
+whoever wakes up next continues the work: a chat session is not the owner of a
+running project, deferring to one that may no longer exist is what made the
+card wait forever, and "someone else owns this" is not a reason to park a card
+in Review. Releasing a card stays exactly as it was — the operator moves it out
+of Review, and only that move counts — but once it is back in a working stack,
+the comment he left on it gets executed rather than summarized.
+
+The chain watchdog had been given a destination that does not exist (the
+agent's own name) and a ban on the two destinations that reach a human, so the
+tool correctly rejected the invented name, the only remaining choice was an
+unattended local console, and two hours of stall reports went there. Task
+prompts now get two rules: never invent a destination name — a task run cannot
+hand work to another session, it can only do the work, write it on the card, or
+tell a human — and never leave a task with no way to reach a human at all.
+Narrowing which destination a task may use is fine; forbidding all of them is
+how a watchdog stays silent through the exact failure it exists to catch. The
+watchdog itself now escalates on a ladder: comment on the card first (which is
+now a live order the sweep picks up), and only if nothing moves by the next
+fire does it go to chat.
+
+Finally, `sessions.last_active` was not the liveness signal its own field
+description claimed. It moved only when the host wrote an inbound row or
+spawned a container, so a container that stays up and polls — the normal state
+for a scheduled series whose pre-task gate keeps declining to wake the agent —
+froze at its last model turn and showed up as hours idle. Both the agent and
+its watchdog read that column to decide whether a chain had died. The sweep now
+folds the container heartbeat into it every tick, which is what the field
+always claimed to mean, and the field description says plainly that the age of
+a session's last output is not evidence about whether it is alive.
+
+Separately, the agent's own system overview stopped naming the model behind
+each subagent. Four of its eight entries still named one none of them had run
+on for weeks — a document that is read as authoritative and is wrong is worse
+than one that sends you to the real source, so each entry now states the cost
+tier it is meant to sit in and points at the `model:`/`effort:` frontmatter and
+`ncl groups config get` for what is actually running. (That overview is
+gitignored per install, so this is the only place the change is recorded.) The
+standing instructions lost their model slugs too, in the three places that had
+them — the delegation rule about overriding a subagent's model, the `smart`
+bullet and the cost-hygiene preamble — each rewritten to name the cost tier and
+point at the subagent file and `ncl groups config get`. The delegation rule
+also got the reason it exists spelled out, which it never had: a bare Claude
+Code alias is silently remapped to a model this group already pays for, and a
+`claude-*` id leaves the group's model choice entirely, so neither does what it
+appears to do on a group that is not running on Anthropic.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-18 — KaiL01 stops writing its own standing rules
 
 A rule KaiL01 writes for itself is one it afterwards follows without

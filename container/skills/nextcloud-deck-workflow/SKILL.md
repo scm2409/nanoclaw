@@ -46,6 +46,14 @@ If a board doesn't have a Review stack yet and you find yourself needing
 one, say so rather than silently working around the gap (e.g. by leaving a
 card in Doing and hoping nobody re-triggers it).
 
+**Released means resumed, not re-read.** The move out of Review is the user
+answering. A card that comes back into a working stack still carrying an
+unfinished step is work to pick up on the next run — including a step that a
+different, now-gone run had started. Read the comments the user left while it
+was parked; they are what you were waiting for. Reporting the card's state
+back and leaving it untouched defeats the gate just as badly as ignoring it:
+the user moved it precisely because they wanted the work to go on.
+
 **Blocked cards go to Review, not back into the queue.** If the same card
 fails the same way on three consecutive runs — a tool that won't answer, a
 credential that won't authenticate, an approval that never lands, a question
