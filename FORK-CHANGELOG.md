@@ -11,6 +11,44 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — a rejected turn stops being a lost wake
+
+The auto-resume flow for a rate-limited turn was built on Anthropic's own
+`rate_limit_event`, which carries the time the limit resets. A gateway in front
+of the model does not send one: OpenRouter answers 429 with `retry-after: 2` and
+`limit_source: "upstream_provider_shared_pool"` — someone else's traffic — and
+the SDK surfaces that only as the turn's error text. With no reset time the
+retry never armed at all. Across this install's entire container-log history,
+`Scheduled usage-limit retry` appears zero times.
+
+For a scheduled run it was worse, because the retry lived inside the chat error
+path, which task runs skip entirely. A rejected sweep tick was written to the
+run log and nowhere else: no wake, no second attempt, the occurrence simply
+gone. Five ticks were lost that way in 36 hours.
+
+A rejection we recognise but have no reset time for now gets a backoff of its
+own — two minutes, then ten, then thirty, then it gives up and leaves it to a
+human. The delay grows because the SDK has already spent ten internal retries
+inside twenty seconds by the time the turn dies, so seconds are demonstrably not
+the timescale on which a shared pool frees up. The host adds its safety margin
+only to a provider-reported reset time, never to a delay the container chose
+itself. And the re-arming now happens before the delivery branches, so a
+scheduled run gets one too — worded for what actually happened to it, since a
+run rejected before it executed was not "left off" anywhere.
+
+One guard keeps that from turning into its own problem. A backoff can grow past
+a series' own interval, and a 15-minute sweep whose retry lands 30 minutes out
+would stack extra wakes on top of ticks that have long since run — wakes that
+skip the pre-task gate, because they arrive as ordinary messages rather than
+task rows. So the container passes the series' cron along and the host drops the
+retry whenever the next occurrence comes first: for a frequent series the
+schedule is the retry, while a daily task rejected at 03:00 still gets its two
+minutes rather than waiting until tomorrow.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-18 — a container stops routing to the roster it was born with
 
 The provider pin — which upstream endpoints the gateway may route to — is

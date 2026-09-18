@@ -36,6 +36,7 @@ import {
   stripInternalTags,
   type RoutingContext,
 } from './formatter.js';
+import { RATE_LIMIT_BACKOFF_MS, planRateLimitRetry } from './rate-limit-retry.js';
 import { isTurnSend, markTurnStart, turnSendKeys } from './turn-sends.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
@@ -80,7 +81,7 @@ function generateId(): string {
  * giving up and leaving it to the user. Guards against a bogus/repeating
  * `resetsAt` turning this into an infinite wake loop.
  */
-const USAGE_LIMIT_RETRY_CAP = 3;
+const USAGE_LIMIT_RETRY_CAP = RATE_LIMIT_BACKOFF_MS.length;
 
 /**
  * Read the retryCount the host stamped on the auto-injected "continue where
@@ -709,6 +710,22 @@ export async function processQuery(
           // A corrective retry handles delivery only; its result is not a
           // second run summary.
           if (routing.taskRun && !taskBlockNudged) autoAppendTaskLog(event.text);
+          // Re-arm a rejected turn before the delivery branches below, because
+          // for a scheduled run none of them ever gets there: the error path is
+          // chat-only, so a 429'd task used to land in the run log and nowhere
+          // else — the tick was simply gone. Skipped when this is the same
+          // error text we already delivered, so a provider stuck re-emitting it
+          // cannot stack up wakes.
+          const rateLimitRetryScheduled =
+            event.isError === true && event.text !== lastDeliveredErrorText
+              ? maybeScheduleUsageLimitRetry(
+                  lastRateLimitClassification,
+                  lastRateLimitResetsAt,
+                  retryCount,
+                  routing,
+                  event.text,
+                )
+              : false;
           if (sent === 0 && event.isError === true && !routing.taskRun) {
             if (event.text === lastDeliveredErrorText) {
               // The provider is stuck re-emitting the exact same error result
@@ -734,16 +751,10 @@ export async function processQuery(
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
             // the failing gateway turn after turn.
             lastDeliveredErrorText = event.text;
-            const scheduled = maybeScheduleUsageLimitRetry(
-              lastRateLimitClassification,
-              lastRateLimitResetsAt,
-              retryCount,
-              routing,
-            );
             deliverErrorResult(
               event.text,
               routing,
-              scheduled ? ' It will resume automatically once the usage limit resets.' : '',
+              rateLimitRetryScheduled ? ' It will resume automatically once the usage limit resets.' : '',
             );
             notifyExchangeComplete(onExchangeComplete, {
               prompt: archivePrompts[0] ?? initialPrompt,
@@ -1042,13 +1053,19 @@ function deliverErrorResult(text: string, routing: RoutingContext, suffix = ''):
 }
 
 /**
- * If the turn just ended on a transient rate_limit rejection (never
- * 'quota' — out-of-credits doesn't resolve by waiting) with a known
- * resetsAt, and we haven't already auto-retried too many times in a row,
- * ask the host to wake this session again once the limit clears. The host
- * applies this via a `writeSessionMessage(..., processAfter)` row that rides
- * the same due-message wake host-sweep already uses for scheduled tasks —
- * see src/modules/usage-limit-retry.ts on the host side.
+ * If the turn just ended on a rejection that waiting can fix, ask the host to
+ * wake this session again once it plausibly has. The host applies this via a
+ * `writeSessionMessage(..., processAfter)` row that rides the same due-message
+ * wake host-sweep already uses for scheduled tasks — see
+ * src/modules/usage-limit-retry.ts on the host side.
+ *
+ * What counts as such a rejection, and how long the wait is, lives in
+ * planRateLimitRetry: Anthropic reports a reset time, a gateway in front of
+ * the model does not and gets a growing backoff instead.
+ *
+ * A scheduled run gets a different sentence than a chat turn. "Continue where
+ * you left off" is wrong for a run that was rejected before it did anything —
+ * nothing was left off, the run simply has to happen.
  *
  * Skipped on the agent-to-agent route for the same reason deliverErrorResult
  * is: an on_wake self-message looping through here again would re-schedule
@@ -1063,10 +1080,13 @@ function maybeScheduleUsageLimitRetry(
   resetsAt: number | undefined,
   retryCount: number,
   routing: RoutingContext,
+  errorText?: string | null,
 ): boolean {
-  if (classification !== 'rate_limit' || typeof resetsAt !== 'number') return false;
-  if (retryCount >= USAGE_LIMIT_RETRY_CAP) {
-    log(`Usage limit retry cap (${USAGE_LIMIT_RETRY_CAP}) reached — not scheduling another auto-retry`);
+  const plan = planRateLimitRetry({ classification, resetsAt, errorText, retryCount });
+  if (!plan) {
+    if (retryCount >= USAGE_LIMIT_RETRY_CAP) {
+      log(`Usage limit retry cap (${USAGE_LIMIT_RETRY_CAP}) reached — not scheduling another auto-retry`);
+    }
     return false;
   }
   if (isAgentToAgentRoute(routing)) return false;
@@ -1075,11 +1095,18 @@ function maybeScheduleUsageLimitRetry(
     kind: 'system',
     content: JSON.stringify({
       action: 'schedule_usage_limit_retry',
-      resetsAt: new Date(resetsAt).toISOString(),
+      resetsAt: new Date(plan.resetsAt).toISOString(),
       retryCount,
+      applyBuffer: plan.applyBuffer,
+      // The host owns the cron maths (it has the parser and the install
+      // timezone) and drops the retry when the series beats it to the wake.
+      ...(routing.taskRecurrence ? { recurrence: routing.taskRecurrence } : {}),
+      ...(routing.taskRun
+        ? { text: 'The provider rejected this scheduled run before it executed. Carry it out now.' }
+        : {}),
     }),
   });
-  log(`Scheduled usage-limit retry for ${new Date(resetsAt).toISOString()} (attempt ${retryCount + 1})`);
+  log(`Scheduled usage-limit retry for ${new Date(plan.resetsAt).toISOString()} (attempt ${retryCount + 1})`);
   return true;
 }
 

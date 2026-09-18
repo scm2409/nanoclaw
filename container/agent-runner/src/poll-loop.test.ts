@@ -217,6 +217,32 @@ describe('routing', () => {
     expect(routing.threadId).toBe('thread-456');
     expect(routing.inReplyTo).toBe('m1');
   });
+
+  it('carries a recurring task\'s cron so a retry can be weighed against it', () => {
+    // A retry that lands after the series would have fired again is not a
+    // retry, it is a second run of work the schedule already covers.
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, recurrence, series_id, content)
+       VALUES ('t1', 'task', datetime('now'), 'pending', '*/15 * * * *', 'ser-1', '{"prompt":"sweep"}')`,
+      )
+      .run();
+
+    const routing = extractRouting(getPendingMessages());
+    expect(routing.taskRun).toBe(true);
+    expect(routing.taskRecurrence).toBe('*/15 * * * *');
+  });
+
+  it('reports no cron for a one-off task', () => {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, series_id, content)
+       VALUES ('t2', 'task', datetime('now'), 'pending', 'ser-2', '{"prompt":"once"}')`,
+      )
+      .run();
+
+    expect(extractRouting(getPendingMessages()).taskRecurrence).toBeNull();
+  });
 });
 
 describe('origin metadata (from= attribute)', () => {
@@ -902,6 +928,38 @@ describe('task-run turn wiring (real processQuery)', () => {
     expect(logs[0].text).toBe('checked feeds — nothing new');
     // and nothing was delivered as chat
     expect(getUndeliveredMessages().filter((m) => m.kind === 'chat')).toHaveLength(0);
+  });
+
+  it('re-arms a scheduled run the provider rejected, instead of only logging it', async () => {
+    // The chat error path is skipped for task runs, so before this a 429'd
+    // sweep tick went into the run log and nowhere else — no retry, no wake,
+    // the occurrence simply lost. Measured five times in 36 hours on the Deck
+    // sweep (17.–18.09.2026).
+    const rejected = 'API Error: Request rejected (429) · Provider returned error';
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: rejected, isError: true };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, TASK_ROUTING, ['t1'], 'claude', undefined, 'prompt', undefined);
+
+    const actions = (
+      getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'system'").all() as Array<{
+        content: string;
+      }>
+    ).map((r) => JSON.parse(r.content) as Record<string, unknown>);
+    const retry = actions.find((a) => a.action === 'schedule_usage_limit_retry');
+
+    expect(retry).toBeDefined();
+    // The gateway reports no reset counter, so the container's own delay is
+    // the whole wait — the host must not pad it.
+    expect(retry!.applyBuffer).toBe(false);
+    expect(Date.parse(retry!.resetsAt as string)).toBeGreaterThan(Date.now());
+    // A run that never executed was not "left off" anywhere.
+    expect(String(retry!.text)).toContain('scheduled run');
+    // The failure is still on the record.
+    expect(taskLogRows().map((l) => l.text)).toContain(rejected);
   });
 
   it('logs and conditionally nudges a second task run in the same open query', async () => {

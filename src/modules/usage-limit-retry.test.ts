@@ -126,6 +126,90 @@ describe('schedule_usage_limit_retry', () => {
     expect(mockGetMessagingGroup).not.toHaveBeenCalled();
   });
 
+  it('wakes exactly when told when the container computed the delay itself', async () => {
+    // A gateway 429 reports no reset counter, so the container picks the delay
+    // (see planRateLimitRetry). Adding the Anthropic-shaped buffer on top would
+    // silently stretch every one of those waits by three minutes.
+    const inDb = makeInboundDb();
+    const handler = getDeliveryAction('schedule_usage_limit_retry')!;
+
+    await handler(
+      {
+        action: 'schedule_usage_limit_retry',
+        resetsAt: '2026-08-20T12:00:00.000Z',
+        retryCount: 0,
+        applyBuffer: false,
+      },
+      fakeSession({ messaging_group_id: null }),
+      inDb,
+    );
+
+    expect(readRows(inDb)[0].process_after).toBe('2026-08-20T12:00:00.000Z');
+  });
+
+  it("carries the container's own wording when it sent one", async () => {
+    // "Continue where you left off" is wrong for a scheduled run that never
+    // ran at all — nothing was left off.
+    const inDb = makeInboundDb();
+    const handler = getDeliveryAction('schedule_usage_limit_retry')!;
+
+    await handler(
+      {
+        action: 'schedule_usage_limit_retry',
+        resetsAt: '2026-08-20T12:00:00.000Z',
+        retryCount: 0,
+        text: 'The scheduled run never executed — carry it out now.',
+      },
+      fakeSession({ messaging_group_id: null }),
+      inDb,
+    );
+
+    const content = JSON.parse(readRows(inDb)[0].content as string);
+    expect(content.text).toBe('The scheduled run never executed — carry it out now.');
+  });
+
+  it('drops the retry when the series fires again before it would', async () => {
+    // Otherwise a 15-minute sweep whose backoff has grown to 30 minutes keeps
+    // stacking retries on top of ticks that already ran: the schedule is the
+    // retry, and a second wake for the same work is pure cost.
+    const inDb = makeInboundDb();
+    const handler = getDeliveryAction('schedule_usage_limit_retry')!;
+
+    await handler(
+      {
+        action: 'schedule_usage_limit_retry',
+        resetsAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        retryCount: 2,
+        applyBuffer: false,
+        recurrence: '*/15 * * * *',
+      },
+      fakeSession({ messaging_group_id: null }),
+      inDb,
+    );
+
+    expect(readRows(inDb)).toHaveLength(0);
+  });
+
+  it('keeps the retry when the next occurrence is further out than the backoff', async () => {
+    // A daily task rejected at 03:00 must not wait until tomorrow.
+    const inDb = makeInboundDb();
+    const handler = getDeliveryAction('schedule_usage_limit_retry')!;
+
+    await handler(
+      {
+        action: 'schedule_usage_limit_retry',
+        resetsAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+        retryCount: 0,
+        applyBuffer: false,
+        recurrence: '0 3 * * *',
+      },
+      fakeSession({ messaging_group_id: null }),
+      inDb,
+    );
+
+    expect(readRows(inDb)).toHaveLength(1);
+  });
+
   it('ignores a payload with an unparseable resetsAt instead of scheduling garbage', async () => {
     const inDb = makeInboundDb();
     const handler = getDeliveryAction('schedule_usage_limit_retry')!;

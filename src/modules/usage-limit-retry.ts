@@ -14,6 +14,9 @@
  * privileged side effect (unlike self-mod's install_packages/add_mcp_server,
  * which mutate container config and therefore go through the guard).
  */
+import { CronExpressionParser } from 'cron-parser';
+
+import { TIMEZONE } from '../config.js';
 import { registerDeliveryAction } from '../delivery.js';
 import { getMessagingGroup } from '../db/messaging-groups.js';
 import { insertMessage } from '../db/session-db.js';
@@ -39,7 +42,40 @@ registerDeliveryAction(
       return;
     }
     const retryCount = typeof content.retryCount === 'number' ? content.retryCount : 0;
-    const processAfter = new Date(resetsAt + RESET_BUFFER_MS).toISOString();
+    // The buffer clears a provider-reported counter that may not have rolled
+    // over exactly on its stated edge. When the container picked the delay
+    // itself — a gateway 429 reports no counter at all — that delay already is
+    // the considered wait, and adding three minutes to each one only makes a
+    // lost tick later.
+    const buffer = content.applyBuffer === false ? 0 : RESET_BUFFER_MS;
+    const processAfter = new Date(resetsAt + buffer).toISOString();
+
+    // A recurring series that fires again before the retry would land needs no
+    // retry: the schedule already is one. Without this a 15-minute sweep whose
+    // backoff has grown to 30 minutes stacks extra wakes on top of ticks that
+    // have long since run — and those extra wakes skip the pre-task gate that
+    // keeps the sweep cheap, because they arrive as plain messages.
+    if (typeof content.recurrence === 'string' && content.recurrence.length > 0) {
+      try {
+        const next = CronExpressionParser.parse(content.recurrence, { tz: TIMEZONE }).next().toDate();
+        if (next.getTime() <= Date.parse(processAfter)) {
+          log.info('Usage-limit retry dropped — next occurrence comes first', {
+            sessionId: session.id,
+            nextOccurrence: next.toISOString(),
+            processAfter,
+          });
+          return;
+        }
+      } catch (err) {
+        // An unparseable cron is the scheduler's problem, not this handler's:
+        // fall through and schedule the retry rather than swallowing the wake.
+        log.warn('Usage-limit retry: unparseable recurrence, scheduling anyway', {
+          sessionId: session.id,
+          recurrence: content.recurrence,
+          err,
+        });
+      }
+    }
 
     const mg = session.messaging_group_id ? getMessagingGroup(session.messaging_group_id) : undefined;
 
@@ -51,7 +87,10 @@ registerDeliveryAction(
       channelType: mg?.channel_type ?? null,
       threadId: session.thread_id,
       content: JSON.stringify({
-        text: 'Usage limit has reset — continue where you left off.',
+        // "Continue where you left off" is a chat sentence. A scheduled run
+        // that was rejected before it executed left nothing off, so the
+        // container sends its own wording for that case.
+        text: typeof content.text === 'string' ? content.text : 'Usage limit has reset — continue where you left off.',
         sender: 'system',
         senderId: 'system',
         retryCount: retryCount + 1,

@@ -102,6 +102,15 @@ export interface RoutingContext {
    *  delivers from a task session; final-text `<message to>` blocks are inert
    *  and the final text auto-appends to the series run log. */
   taskRun: boolean;
+  /**
+   * The cron of the task series this batch belongs to, when it has one.
+   *
+   * Read by the rate-limit retry: a series that fires again on its own before
+   * the retry would land needs no retry — the schedule already is one, and a
+   * second wake for the same work is pure cost. Null for a one-off task or a
+   * chat batch.
+   */
+  taskRecurrence: string | null;
 }
 
 /**
@@ -116,6 +125,7 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
     threadId: first?.thread_id ?? null,
     inReplyTo: first?.id ?? null,
     taskRun: messages.length > 0 && messages.every((m) => m.kind === 'task'),
+    taskRecurrence: messages.find((m) => m.kind === 'task' && m.recurrence)?.recurrence ?? null,
   };
 }
 
