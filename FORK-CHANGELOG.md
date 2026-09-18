@@ -11,6 +11,35 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — a container stops routing to the roster it was born with
+
+The provider pin — which upstream endpoints the gateway may route to — is
+resolved host-side, refreshed daily from the gateway's roster, and written into
+the `container.json` that is mounted into every container. The runner read it
+once at startup. A container that stays up for days therefore kept routing to
+the roster of its spawn day.
+
+That turned a routine roster change into a container that fails every turn. The
+Deck-sweep container had been up two days holding `["openai","wafer"]` while the
+day's roster said `["inference-net","openai","relace"]`; 101 of its 155 requests
+came back 429 `server_overloaded` from wafer's shared upstream pool, while a
+sibling container spawned minutes later — same model, same key — saw none. The
+existing recovery did not cover it: dropping the pin only fires when it routes
+nowhere at all (a 404), and the host's wake retry needs a `resetsAt` the gateway
+does not send, so each rate-limited sweep tick was simply lost.
+
+Two changes. The pin is now re-read from the mounted file at the start of every
+turn, so a refreshed roster reaches a live container without a respawn. And
+because a long-lived container may hold one SDK query open for days and never
+start another turn through that path, a turn that dies on an upstream 429 now
+re-reads the pin and, only if it actually changed, runs again on the current one
+— resuming the same session. An unchanged pin is left alone: retrying it would
+be a second call to the same overloaded endpoint.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-16 — "nothing was running" stops being told as "nothing was lost"
 
 The idle-reclaim note introduced on 14.09 reassured the agent that no subagent

@@ -95,6 +95,17 @@ export interface ProviderOptions {
    * leave the choice to the gateway.
    */
   providerPin?: { only: string[]; allow_fallbacks: boolean };
+  /**
+   * Re-read the pin at the start of every turn. The host rewrites it daily as
+   * the gateway's roster moves, so a container that lives longer than a day
+   * would otherwise keep routing to providers the roster no longer names —
+   * observed as two thirds of a container's requests failing 429 against a
+   * provider its siblings had already stopped using.
+   *
+   * Undefined keeps the spawn-time `providerPin` for the container's life,
+   * which is what every non-gateway install wants.
+   */
+  refreshProviderPin?: () => { only: string[]; allow_fallbacks: boolean } | undefined;
 }
 
 export interface QueryInput {

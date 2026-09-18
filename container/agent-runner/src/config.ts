@@ -84,6 +84,31 @@ export function loadConfig(): RunnerConfig {
   return _config;
 }
 
+/**
+ * Read the provider pin straight from container.json, bypassing the cache.
+ *
+ * The pin is the one field the host rewrites under a running container: it is
+ * refreshed daily from the gateway's roster (see src/provider-pins.ts) and
+ * re-materialized into container.json, which is mounted rather than copied.
+ * Every other field changes only through a path that respawns the container,
+ * so re-reading those would apply a change the operator expects to take effect
+ * on restart — silently and mid-turn.
+ *
+ * Why it can't wait for the respawn: a container that stays up for days keeps
+ * routing to the roster of its spawn day. Measured 2026-09-18 — a two-day-old
+ * container held providers the current roster no longer named, and two thirds
+ * of its requests came back 429 from one of them while a container spawned
+ * minutes earlier, same model and key, saw none.
+ */
+export function readProviderPin(configPath: string = CONFIG_PATH): RunnerConfig['providerPin'] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    return isProviderPin(raw.providerPin) ? raw.providerPin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Get the loaded config. Throws if loadConfig() hasn't been called. */
 export function getConfig(): RunnerConfig {
   if (!_config) throw new Error('Config not loaded — call loadConfig() first');

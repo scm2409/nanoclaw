@@ -25,7 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { loadConfig } from './config.js';
+import { loadConfig, readProviderPin } from './config.js';
 import { buildSystemPromptAddendum } from './destinations.js';
 import { getTaskSeriesId } from './db/session-routing.js';
 import { ensureMemoryScaffold } from './memory/scaffold.js';
@@ -153,6 +153,9 @@ async function main(): Promise<void> {
     transcriptRotateDays: config.transcriptRotateDays,
     agentGroupId: config.agentGroupId || undefined,
     providerPin: config.providerPin,
+    // Re-read per turn: the host refreshes the roster daily into the same
+    // mounted container.json, and a container can outlive several refreshes.
+    refreshProviderPin: () => readProviderPin(),
   });
   provider.registerMemorySessionHook(MEMORY_SESSION_HOOK);
 

@@ -274,6 +274,27 @@ const PROVIDER_ROUTING_ERROR_RE = /issue with the selected model|no allowed prov
 const PROVIDER_DROPPED_STREAM_RE = /network connection lost|provider_unavailable/i;
 
 /**
+ * A turn the gateway refused because the pinned provider is overloaded.
+ *
+ * Rendered by the CLI as "API Error: Request rejected (429) · Provider
+ * returned error"; the gateway's own body says
+ * `limit_source: "upstream_provider_shared_pool"` — someone else's traffic,
+ * not ours.
+ *
+ * Worth a restart only when the roster moved: measured 2026-09-18, a container
+ * up for two days still pinned `["openai","wafer"]` while the day's roster said
+ * `["inference-net","openai","relace"]`, and 101 of its 155 requests died on
+ * wafer while a sibling spawned minutes later saw none. Same pin as before and
+ * a restart would just be a second call to the same overloaded endpoint, so
+ * that case is left to the host's wake retry.
+ *
+ * Anchored on the API-error line rather than a bare `429` so a model quoting
+ * the number back — an HTTP status in a log the agent is reading, say — cannot
+ * trigger a restart.
+ */
+const UPSTREAM_RATE_LIMIT_RE = /API Error[^\n]*\b429\b|\b429\b[^\n]*(rate.?limit|rejected|overload)/i;
+
+/**
  * The message of a failed turn, or null for anything else.
  *
  * Mirrors the translator's own extraction: `result` carries the text on
@@ -911,6 +932,9 @@ export class ClaudeProvider implements AgentProvider {
   private transcriptRotateDays?: number;
   /** The exact `CLAUDE_CODE_EXTRA_BODY` our own pin produced, if any. */
   private pinEnvValue?: string;
+  /** `this.env` without our pin — the base a refreshed pin is re-applied to. */
+  private unpinnedEnv: Record<string, string | undefined>;
+  private refreshProviderPin?: () => ProviderPin | undefined;
   private memorySessionHook?: MemorySessionHookRegistration;
 
   constructor(options: ProviderOptions = {}) {
@@ -930,11 +954,41 @@ export class ClaudeProvider implements AgentProvider {
     };
     const pinEnv = providerPinEnv(options.providerPin, baseEnv);
     this.pinEnvValue = pinEnv.CLAUDE_CODE_EXTRA_BODY;
-    this.env = {
+    this.unpinnedEnv = {
       ...baseEnv,
       ...stickySessionEnv(options.agentGroupId, baseEnv),
-      ...pinEnv,
     };
+    this.refreshProviderPin = options.refreshProviderPin;
+    this.env = { ...this.unpinnedEnv, ...pinEnv };
+  }
+
+  /**
+   * The env for this turn, with the pin re-read if a source was wired.
+   *
+   * The pin is resolved host-side and refreshed daily as the gateway's roster
+   * moves; a container that outlives a refresh would otherwise keep routing to
+   * providers the roster no longer names. Measured 2026-09-18: a two-day-old
+   * container held `["openai","wafer"]` against a roster that said
+   * `["inference-net","openai","relace"]`, and 101 of its 155 requests came
+   * back 429 `server_overloaded` from wafer while a sibling spawned minutes
+   * later — same model, same key — saw none.
+   *
+   * Re-applied to `unpinnedEnv` rather than patched into `env`, so withdrawing
+   * the pin removes the key instead of leaving the previous one behind. A
+   * turn-scoped drop (PROVIDER_ROUTING_ERROR_RE) never touches either, so a
+   * refresh can't resurrect a pin mid-turn.
+   */
+  private envForTurn(): Record<string, string | undefined> {
+    if (!this.refreshProviderPin) return this.env;
+
+    const pinEnv = providerPinEnv(this.refreshProviderPin(), this.unpinnedEnv);
+    const next = pinEnv.CLAUDE_CODE_EXTRA_BODY;
+    if (next !== this.pinEnvValue) {
+      log(`Provider pin changed: ${this.pinEnvValue ?? '(none)'} -> ${next ?? '(none)'}`);
+      this.pinEnvValue = next;
+      this.env = { ...this.unpinnedEnv, ...pinEnv };
+    }
+    return this.env;
   }
 
   registerMemorySessionHook(hook: MemorySessionHookRegistration): void {
@@ -1004,7 +1058,7 @@ export class ClaudeProvider implements AgentProvider {
     // The env an attempt runs with. Mutable because a turn the pin has locked
     // out of every endpoint is retried once with the pin dropped — see
     // PROVIDER_ROUTING_ERROR_RE.
-    let attemptEnv: Record<string, string | undefined> = { ...this.env, ...aliasEnv };
+    let attemptEnv: Record<string, string | undefined> = { ...this.envForTurn(), ...aliasEnv };
 
     const startSdk = (promptStream: MessageStream, env: Record<string, string | undefined>, resume?: string) =>
       sdkQuery({
@@ -1048,7 +1102,11 @@ export class ClaudeProvider implements AgentProvider {
 
     let aborted = false;
     const mainModel = this.model;
-    const pinEnvValue = this.pinEnvValue;
+    // Not const: a roster refresh mid-turn replaces the pin this turn runs
+    // with, and the unpinned-retry path below must compare against the one
+    // actually in the env rather than the one the turn started with.
+    let pinEnvValue = this.pinEnvValue;
+    const refreshEnv = () => this.envForTurn();
     // Lazily populated on the first subagent invocation and reused for the
     // rest of this query — resolves subagent name -> model via the SDK's
     // Query.supportedAgents(), which mirrors the .claude/agents/*.md
@@ -1071,6 +1129,7 @@ export class ClaudeProvider implements AgentProvider {
     async function* sdkMessages(): AsyncGenerator<SDKMessage> {
       let pinRetried = false;
       let dropRetried = false;
+      let rosterRetried = false;
       let sessionId = input.continuation;
       while (true) {
         let restart = false;
@@ -1084,6 +1143,28 @@ export class ClaudeProvider implements AgentProvider {
               pinRetried = true;
               attemptEnv = unpinned;
               log(`Provider pin routes nowhere — retrying turn unpinned: ${failure.slice(0, 160)}`);
+              stream = new MessageStream();
+              stream.push(input.prompt);
+              sdkResult = startSdk(stream, attemptEnv, sessionId);
+              restart = true;
+              break;
+            }
+          }
+
+          // A pin the roster has moved past: the turn died 429 on a provider
+          // this container was told about at spawn and the host has since
+          // stopped naming. Re-read it and run the turn again on the current
+          // roster. Own budget, like every recovery here — and gated on the
+          // pin actually changing, so an overloaded-but-current provider is
+          // not retried into the same wall.
+          if (failure && !rosterRetried && UPSTREAM_RATE_LIMIT_RE.test(failure)) {
+            const refreshed = refreshEnv();
+            const refreshedPin = refreshed.CLAUDE_CODE_EXTRA_BODY;
+            if (refreshedPin !== pinEnvValue) {
+              rosterRetried = true;
+              pinEnvValue = refreshedPin;
+              attemptEnv = { ...refreshed, ...aliasEnv };
+              log(`Provider roster moved under a rate-limited turn — retrying on the current pin: ${failure.slice(0, 160)}`);
               stream = new MessageStream();
               stream.push(input.prompt);
               sdkResult = startSdk(stream, attemptEnv, sessionId);
