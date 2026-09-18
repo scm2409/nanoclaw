@@ -11,6 +11,27 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — KaiL01 stops writing its own standing rules
+
+A rule KaiL01 writes for itself is one it afterwards follows without
+re-examining it, so a careless sentence keeps costing for weeks — which makes
+self-edits exactly the wrong place to spend the cheapest reasoning available.
+Martin's call: those edits go to the `smart` subagent.
+
+Editing `instructions.prepend.md`, a subagent definition under `.claude/agents/`
+or one of KaiL01's own skills is now delegated to `smart`, and unlike every
+other `smart` run it needs no question first — the standing rule is the
+approval, while the cost-hygiene caps still apply. The order names the change
+and its reason, the file and section, the rules the new passage must not
+contradict, and the voice and structure it has to match. `smart` writes the
+passage; KaiL01 places it, reads it back against its neighbours and reports what
+changed — drafting it and having `smart` merely review it defeats the point.
+Routine memory writes, journals, task notes and card comments stay KaiL01's own.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-18 — the mandate handed to OpenCode stops prescribing the how
 
 KaiL01's orders to the dev box had been drifting from mandates into scripts. The
