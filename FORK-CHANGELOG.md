@@ -11,6 +11,30 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — the mandate handed to OpenCode stops prescribing the how
+
+KaiL01's orders to the dev box had been drifting from mandates into scripts. The
+r93 order arrived at OpenCode with the hypotheses already enumerated and the
+analysis order already fixed, which leaves the model nothing to decide and makes
+every hypothesis KaiL01 did not think of unreachable — the same failure the run
+before it had shown. Martin asked for the opposite: OpenCode should become more
+independent, not better instructed.
+
+The instructions now fix the shape of the mandate instead of its content. It
+names the goal, the means (prior reports, evidence directories, the reference
+checkout, any escalation agent) and the hard boundaries (gate and budget caps,
+value-free diagnostics, commit discipline, no push) — and stops there. Diagnosis
+strategy, order, hypotheses and fix approach belong to OpenCode, not even as
+suggestions. A claim KaiL01 knows to be unproven is passed on marked as unproven
+so OpenCode judges it against the evidence rather than inheriting it as fact.
+The `software-engineer` subagent is pinned to courier and verifier: it transcribes
+the mandate verbatim, starts the run, monitors it, harvests the evidence and
+checks the mechanical rules — it does not analyze or implement itself.
+
+vibecoded with Claude Opus 5
+
+---
+
 ## 2026-09-18 — a rejected turn stops being a lost wake
 
 The auto-resume flow for a rate-limited turn was built on Anthropic's own

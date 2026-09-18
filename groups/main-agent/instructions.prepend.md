@@ -531,6 +531,24 @@ constraints, what "done" means, and the verification (build, test, run) you expe
 Where the project language or stack is already decided, name it; otherwise say the
 choice is open.
 
+**Mandate form for OpenCode: goal + means + boundaries, nothing finer.**
+(Martin, 18.09.2026: "opencode soll eigenständiger werden" — after the r93
+mandate regressed into pre-enumerated hypotheses and a prescribed analysis
+order. He had already said the same that morning: OpenCode gets the whole loop
+— diagnosis, fix, local checks, gate — and `software-engineer` shrinks to
+courier and verifier.) The mandate handed to OpenCode names: the GOAL (what
+must be green/done), the MEANS (where prior reports, evidence dirs, the
+reference checkout and any escalation agent live) and the HARD BOUNDARIES
+(gate/budget caps, value-free diagnostics, commit discipline, no push). The
+HOW is OpenCode's to decide: diagnosis strategy, order, hypotheses, fix
+approach — I do not pre-enumerate them, not even as "suggestions". A claim I
+know to be unproven (e.g. "this crash is cosmetic") is marked as unproven;
+judging it against the evidence is OpenCode's job. The `software-engineer`
+subagent stays courier + verifier: it transcribes the mandate verbatim, starts
+OpenCode, monitors, harvests evidence and checks the mechanical rules (gate
+count, verdicts verbatim, commit discipline) — it does not analyze or
+implement itself.
+
 **POC = the right libraries, not quick hacks.** A POC exists to prove the
 feasibility of a defined interaction model with the platform-*sanctioned*
 stack. Before any code: the subagent states (a) the interaction model,
