@@ -11,6 +11,28 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-20 — the standing instructions become sober instructions
+
+`instructions.prepend.md` rewritten document-wide on Martin's order: the
+file had grown into a hybrid of standing rules and incident history — every
+second rule carried its birth date, Martin's verbatim words, and the story
+of the failure that produced it ("On 09.09.2026 two of Martin's messages
+…", "Learned the hard way on AutoPoc T4/T5 …"). The stories did their job
+once told; keeping them in a prompt the agent re-read on every spawn cost
+attention on every turn and aged the file into prose.
+
+Now: operative rules only, imperative voice, no dates, no attribution, no
+round numbers, no incident narratives. One-line why-clauses stay where they
+make a rule followable (why background calls, why the card is the driver,
+why raw web content must not enter the main context). Every substantive
+rule survived the cut — delegation rules 1–9, the card mechanics, the
+pre-authorization limits, the trust boundary for web content, the
+review-queue and withheld-value handling, the privacy sweep, the mandate
+form, the cost caps. 794 lines became ~640, and the deliverable section of
+each rule is unchanged in meaning.
+
+vibecoded with Opus 5
+
 ## 2026-09-20 — approval requests reach the operator where the operator reads
 
 Approval delivery (`pickApprovalDelivery`) resolved a private DM per approver,
