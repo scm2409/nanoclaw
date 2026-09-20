@@ -3,6 +3,7 @@ import {
   getPendingMessages,
   markProcessing,
   markCompleted,
+  markErrorRetry,
   markScriptSkipped,
   type MessageInRow,
 } from './db/messages-in.js';
@@ -700,7 +701,18 @@ export async function processQuery(
         // follow-up pushes. The agent may have responded via MCP
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
-        markCompleted([...initialBatchIds, ...unackedFollowUpIds]);
+        //
+        // Except when the turn failed: a chat batch the provider rejected
+        // before it executed is not read mail. Task rows stay on the
+        // completed path — their series fires again, run-health counts the
+        // failure, and the sweep's own gate keeps ticks cheap — but a
+        // rejected chat message is handed back (host-side error-retry:
+        // pending again with a backoff, MAX_TRIES, then failed).
+        if (event.isError === true && !routing.taskRun) {
+          markErrorRetry([...initialBatchIds, ...unackedFollowUpIds]);
+        } else {
+          markCompleted([...initialBatchIds, ...unackedFollowUpIds]);
+        }
         unackedFollowUpIds.length = 0;
         if (event.text) {
           const { sent, hasUnwrapped, taskBlocks } = dispatchResultText(event.text, routing);

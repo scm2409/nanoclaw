@@ -121,6 +121,24 @@ export function markCompleted(ids: string[]): void {
 }
 
 /**
+ * Mark a chat batch as rejected-with-error — the claim the host sweep turns
+ * back into a pending message with a backoff (src/host-sweep.ts's
+ * processErrorRetryAcks). A turn that died before the model read the text is
+ * not a finished one; only a container crash used to say so, and a clean
+ * provider error used to lose the batch silently.
+ */
+export function markErrorRetry(ids: string[]): void {
+  if (ids.length === 0) return;
+  const db = getOutboundDb();
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'error-retry', ?)",
+  );
+  db.transaction(() => {
+    for (const id of ids) stmt.run(id, new Date().toISOString());
+  })();
+}
+
+/**
  * Ack task messages whose pre-task script gated the run. The reason decides
  * the ack: `gated` (wakeAgent=false) is the monitor working as designed → a
  * plain `completed`; `error` (broken script) → `script-skip:error`, which the

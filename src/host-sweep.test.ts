@@ -11,6 +11,7 @@ import {
   ABSOLUTE_CEILING_MS,
   BACKGROUND_CEILING_MS,
   CLAIM_STUCK_MS,
+  _processErrorRetryAcksForTesting,
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
   parseSqliteUtc,
@@ -500,5 +501,91 @@ describe('nextLastActive — heartbeat liveness', () => {
 
   it('returns the heartbeat stamp when the recorded value is unparseable', () => {
     expect(nextLastActive('not-a-date', HB)).toBe('2026-09-18T13:00:00.000Z');
+  });
+});
+
+describe('processErrorRetryAcks — a rejected chat turn is not a finished one', () => {
+  it('reschedules an error-retry claim with a minutes-scale backoff and clears the claim', () => {
+    const { inDb, outDb } = makeSessionDbs();
+    inDb
+      .prepare(
+        "INSERT INTO messages_in (id, seq, kind, timestamp, status, tries, content) VALUES ('m-1', 1, 'chat', ?, 'pending', 0, '{}')",
+      )
+      .run(new Date().toISOString());
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-1', 'error-retry', ?)").run(new Date().toISOString());
+
+    _processErrorRetryAcksForTesting(inDb, outDb, fakeSession());
+
+    const row = inDb.prepare('SELECT status, tries, process_after FROM messages_in WHERE id = ?').get('m-1') as {
+      status: string;
+      tries: number;
+      process_after: string | null;
+    };
+    expect(row.status).toBe('pending');
+    expect(row.tries).toBe(1);
+    expect(row.process_after).not.toBeNull();
+    // Minute-scale, not the seconds-scale crash backoff: the usual reason a
+    // turn failed on the provider is a limit that clears in minutes or hours,
+    // and a 10-80s ladder would burn all five attempts against a 403 night.
+    const backoffMs = Date.parse(row.process_after!) - Date.now();
+    expect(backoffMs).toBeGreaterThan(60_000);
+    expect(getProcessingClaims(outDb)).toEqual([]);
+    // error-retry claims are gone; nothing else was touched.
+    const acks = outDb.prepare('SELECT status FROM processing_ack').all();
+    expect(acks).toHaveLength(0);
+  });
+
+  it('grows the backoff with each successive failure', () => {
+    const { inDb, outDb } = makeSessionDbs();
+    const insert = inDb.prepare(
+      "INSERT INTO messages_in (id, seq, kind, timestamp, status, tries, content) VALUES (?, ?, 'chat', ?, 'pending', ?, '{}')",
+    );
+    insert.run('m-1', 1, new Date().toISOString(), 0);
+    insert.run('m-2', 2, new Date().toISOString(), 2);
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-1', 'error-retry', ?)").run(new Date().toISOString());
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-2', 'error-retry', ?)").run(new Date().toISOString());
+
+    _processErrorRetryAcksForTesting(inDb, outDb, fakeSession());
+
+    const first = inDb.prepare('SELECT process_after FROM messages_in WHERE id = ?').get('m-1') as {
+      process_after: string;
+    };
+    const third = inDb.prepare('SELECT process_after FROM messages_in WHERE id = ?').get('m-2') as {
+      process_after: string;
+    };
+    expect(Date.parse(third.process_after)).toBeGreaterThan(Date.parse(first.process_after));
+  });
+
+  it('marks the message failed once the retry cap is spent', () => {
+    const { inDb, outDb } = makeSessionDbs();
+    inDb
+      .prepare(
+        "INSERT INTO messages_in (id, seq, kind, timestamp, status, tries, content) VALUES ('m-1', 1, 'chat', ?, 'pending', 5, '{}')",
+      )
+      .run(new Date().toISOString());
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-1', 'error-retry', ?)").run(new Date().toISOString());
+
+    _processErrorRetryAcksForTesting(inDb, outDb, fakeSession());
+
+    const row = inDb.prepare('SELECT status FROM messages_in WHERE id = ?').get('m-1') as { status: string };
+    expect(row.status).toBe('failed');
+    expect(outDb.prepare('SELECT message_id FROM processing_ack').all()).toEqual([]);
+  });
+
+  it('leaves completed, failed and processing claims alone', () => {
+    const { inDb, outDb } = makeSessionDbs();
+    const ts = new Date().toISOString();
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-done', 'completed', ?)").run(ts);
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-fail', 'failed', ?)").run(ts);
+    outDb.prepare("INSERT INTO processing_ack VALUES ('m-proc', 'processing', ?)").run(ts);
+
+    _processErrorRetryAcksForTesting(inDb, outDb, fakeSession());
+
+    const statuses = outDb.prepare('SELECT message_id, status FROM processing_ack ORDER BY message_id').all();
+    expect(statuses).toEqual([
+      { message_id: 'm-done', status: 'completed' },
+      { message_id: 'm-fail', status: 'failed' },
+      { message_id: 'm-proc', status: 'processing' },
+    ]);
   });
 });

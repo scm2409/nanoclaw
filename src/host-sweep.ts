@@ -258,6 +258,9 @@ async function sweepSession(session: Session): Promise<void> {
     // 1. Sync processing_ack → messages_in status
     if (outDb) {
       syncProcessingAcks(inDb, outDb);
+      // Chat batches the container rejected on a provider error come back as
+      // pending with a backoff, instead of staying read-but-unprocessed.
+      processErrorRetryAcks(inDb, outDb, session);
     }
 
     // 2. Wake a container if work is due and nothing is running. Ordered
@@ -484,4 +487,77 @@ function resetStuckProcessingRows(
   } finally {
     if (ownsDb) useDb?.close();
   }
+}
+
+/**
+ * A chat turn that ended on a provider error is not a finished one. The
+ * container marks such batches `error-retry` in processing_ack instead of
+ * `completed` (see container/agent-runner/src/poll-loop.ts); this turns each
+ * claim back into a pending message with a minutes-scale backoff, so the
+ * operator can fix the cause (raise a limit, wait out a provider outage) and
+ * the batch is delivered again instead of sitting read-but-unprocessed.
+ *
+ * The loop guard is the same one crash recovery uses: `MAX_TRIES` attempts,
+ * then the message is `failed`. The base is deliberately minutes, not the
+ * seconds of the crash backoff — a quota outage lasts hours, and a seconds
+ * ladder would burn every attempt before the cause could be fixed.
+ */
+export const ERROR_RETRY_BASE_SEC = 120;
+
+function processErrorRetryAcks(
+  inDb: Database.Database,
+  outDb: Database.Database,
+  session: Session,
+  writableOutDb?: Database.Database,
+): void {
+  let claims: Array<{ message_id: string }>;
+  try {
+    claims = outDb.prepare("SELECT message_id FROM processing_ack WHERE status = 'error-retry'").all() as Array<{
+      message_id: string;
+    }>;
+  } catch {
+    return;
+  }
+  if (claims.length === 0) return;
+
+  for (const { message_id } of claims) {
+    const msg = getMessageForRetry(inDb, message_id, 'pending');
+    if (msg && msg.tries >= MAX_TRIES) {
+      markMessageFailed(inDb, message_id);
+      log.warn('Message marked as failed after max error retries', { messageId: message_id, sessionId: session.id });
+      continue;
+    }
+    const backoffSec = ERROR_RETRY_BASE_SEC * Math.pow(2, msg?.tries ?? 0);
+    retryWithBackoff(inDb, message_id, backoffSec);
+    log.info('Error-retry: message rescheduled with backoff', {
+      messageId: message_id,
+      sessionId: session.id,
+      tries: msg?.tries ?? 0,
+      backoffSec,
+    });
+  }
+
+  // The claims have done their job — drop them so the poll (container alive)
+  // or the due-message wake (container gone) can pick the messages up again.
+  const ownsDb = !writableOutDb;
+  let useDb: Database.Database | null = writableOutDb ?? null;
+  try {
+    if (!useDb) useDb = openOutboundDbRw(session.agent_group_id, session.id);
+    const cleared = useDb.prepare("DELETE FROM processing_ack WHERE status = 'error-retry'").run().changes;
+    if (cleared > 0) {
+      log.info('Cleared error-retry claims', { sessionId: session.id, cleared });
+    }
+  } catch (err) {
+    log.warn('Failed to clear error-retry claims', { sessionId: session.id, err });
+  } finally {
+    if (ownsDb) useDb?.close();
+  }
+}
+
+export function _processErrorRetryAcksForTesting(
+  inDb: Database.Database,
+  outDb: Database.Database,
+  session: Session,
+): void {
+  processErrorRetryAcks(inDb, outDb, session, outDb);
 }

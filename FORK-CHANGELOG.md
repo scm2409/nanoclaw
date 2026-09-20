@@ -11,6 +11,46 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-20 — a rejected chat turn is not a finished one
+
+When a turn ended on a provider error, the poll loop marked its whole message
+batch completed — including messages the model never saw. A container crash
+mid-turn had always handed its claims back (the host sweep resets stale
+`processing` rows), but a clean error result silently ate the batch. That is
+where Martin's Matrix messages went during the 403 night: written to disk,
+pushed into a turn that then died on `API Error: 403`, marked completed,
+never read.
+
+Now a chat batch whose turn ended on an error is marked `error-retry` in
+processing_ack instead. The host sweep turns each such claim back into a
+pending message with a backoff — minutes-scale, not the seconds of the crash
+backoff, because the usual cause is a limit that clears when the operator
+raises it — reusing the existing `MAX_TRIES` guard, after which the message
+is `failed` like any exhaustively retried one. Task batches keep the old
+behaviour on purpose: their series fires again on its own, run-health counts
+the failure, and the pre-task gate keeps ticks cheap. A redelivered batch can
+repeat partial work from the failed turn — the same trade-off the crash path
+always had; it is now consistent between the two paths.
+
+Two related fixes ride along. The run-health alert now goes to the agent
+group's own chat room — the one the operator reads — instead of an
+approver-DM resolution that parked three budget-exhaustion alerts in a
+stale 1:1 room nobody opened; the DM remains the fallback when a group has
+no notice-carrying channel destination. And diagnostic notices (token
+summaries, subagent starts) are no longer written from task sessions at all:
+with no messaging group to route them on, every one of them died at delivery
+with "Message missing routing fields" — 1,700 accumulated in the sweep
+session, none ever delivered.
+
+The deck-sweep-gate tests from 2026-09-18 turned out to fail outside the
+session that wrote them, for two environment reasons fixed here: the
+fixture's `console.log(port)` picks up ANSI colour codes when the caller's
+shell carries `FORCE_COLOR`, and the gate's curl honours a shell-set
+`HTTP_PROXY` even for loopback — the port is now stripped of escapes and the
+gate runs with `NO_PROXY=127.0.0.1,localhost`.
+
+vibecoded with Opus 5
+
 ## 2026-09-20 — a quota rejection leaves a note behind instead of vanishing
 
 The 403 night of 19.–20.09.2026 (OpenRouter monthly budget exhausted) cost the

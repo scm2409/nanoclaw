@@ -1018,6 +1018,49 @@ describe('task-run turn wiring (real processQuery)', () => {
     expect(chat.map((m) => JSON.parse(m.content).text)).toContain(quota);
   });
 
+  it('hands a rejected chat batch back for redelivery instead of completing it', async () => {
+    // The model never read the message — the turn died on the provider. A
+    // crash mid-turn always re-delivered; a clean error used to complete the
+    // batch and lose the text (2026-09-19/20: messages from the 403 night).
+    const quota = 'Failed to authenticate. API Error: 403 Budget limit exceeded (monthly limit). Contact your org admin.';
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: quota, isError: true };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+    const routing = {
+      platformId: 'matrix:@user:example.org',
+      channelType: 'matrix',
+      threadId: null,
+      inReplyTo: 'm1',
+      taskRun: false,
+    };
+
+    await processQuery(query, routing, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const acks = getOutboundDb().prepare('SELECT message_id, status FROM processing_ack').all() as Array<{
+      message_id: string;
+      status: string;
+    }>;
+    expect(acks).toContainEqual({ message_id: 'm1', status: 'error-retry' });
+  });
+
+  it('still completes a task batch the provider rejected — the series re-fires on its own', async () => {
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: 'API Error: 500 Provider returned error', isError: true };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, TASK_ROUTING, ['t1'], 'claude', undefined, 'prompt', undefined);
+
+    const acks = getOutboundDb().prepare('SELECT message_id, status FROM processing_ack').all() as Array<{
+      message_id: string;
+      status: string;
+    }>;
+    expect(acks).toContainEqual({ message_id: 't1', status: 'completed' });
+  });
+
   it('never queues a recovery note when the turn merely quotes a quota error', async () => {
     // A healthy turn that read a log containing the provider's error line must
     // not arm anything — only the turn's own rejection counts.
@@ -1329,4 +1372,3 @@ describe('settled background work (real processQuery)', () => {
     expect(nudge.length).toBeLessThan(400);
   });
 });
-
