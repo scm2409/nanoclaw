@@ -37,6 +37,7 @@ import {
   type RoutingContext,
 } from './formatter.js';
 import { RATE_LIMIT_BACKOFF_MS, planRateLimitRetry } from './rate-limit-retry.js';
+import { isQuotaRejection, quotaRecoveryNoteText } from './quota-recovery-note.js';
 import { isTurnSend, markTurnStart, turnSendKeys } from './turn-sends.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
@@ -726,6 +727,18 @@ export async function processQuery(
                   event.text,
                 )
               : false;
+          // A quota rejection arms no timed retry (no known interval fixes a
+          // budget limit), but the rejection must not vanish: queue a recovery
+          // note the next successful wake carries in as context. Same guard as
+          // above, so a provider stuck re-emitting the same error cannot stack
+          // up notes either.
+          if (
+            event.isError === true &&
+            !rateLimitRetryScheduled &&
+            event.text !== lastDeliveredErrorText
+          ) {
+            maybeQueueQuotaRecoveryNote(routing, event.text, lastRateLimitClassification);
+          }
           if (sent === 0 && event.isError === true && !routing.taskRun) {
             if (event.text === lastDeliveredErrorText) {
               // The provider is stuck re-emitting the exact same error result
@@ -1107,6 +1120,31 @@ function maybeScheduleUsageLimitRetry(
     }),
   });
   log(`Scheduled usage-limit retry for ${new Date(plan.resetsAt).toISOString()} (attempt ${retryCount + 1})`);
+  return true;
+}
+
+/**
+ * Queue a recovery note after a quota rejection — see quota-recovery-note.ts
+ * for why this is a note and not a timed retry. The host deduplicates the
+ * resulting inbound row, so repeated rejected ticks during one outage cost
+ * one note, not one per tick.
+ */
+function maybeQueueQuotaRecoveryNote(
+  routing: RoutingContext,
+  errorText: string | null,
+  classification: string | undefined,
+): boolean {
+  if (!isQuotaRejection(errorText, classification)) return false;
+  if (isAgentToAgentRoute(routing)) return false;
+  writeMessageOut({
+    id: generateId(),
+    kind: 'system',
+    content: JSON.stringify({
+      action: 'queue_quota_recovery_note',
+      text: quotaRecoveryNoteText(routing),
+    }),
+  });
+  log('Quota rejection — queued a recovery note for the next successful wake');
   return true;
 }
 

@@ -22,3 +22,4 @@ import './permissions/index.js';
 import './agent-to-agent/index.js';
 import './self-mod/index.js';
 import './usage-limit-retry.js';
+import './quota-recovery-note.js';

@@ -431,7 +431,7 @@ describe('poll loop — usage limit auto-retry', () => {
     expect(pending).toHaveLength(0);
   });
 
-  it('does not schedule a retry for quota (out-of-credits) errors', async () => {
+  it('queues a recovery note for quota (out-of-credits) errors, but no timed retry', async () => {
     insertMessage('m1', { sender: 'Alice', text: 'trigger quota error' }, { platformId: 'chan-1', channelType: 'discord' });
 
     const provider = new RateLimitProvider('quota', Date.parse('2026-08-20T12:00:00.000Z'));
@@ -441,9 +441,19 @@ describe('poll loop — usage limit auto-retry', () => {
     await waitFor(() => getUndeliveredMessages().length > 0, 2000);
     await stopPollLoop(controller, loop);
 
+    // The error text still reaches the user as chat.
     const out = getUndeliveredMessages();
-    expect(out).toHaveLength(1);
-    expect(out[0].kind).toBe('chat');
+    expect(out.filter((m) => m.kind === 'chat')).toHaveLength(1);
+    // No timed retry — no interval fixes an exhausted budget. But the
+    // rejection is not lost either: a recovery note rides into the first
+    // wake after the operator raised the limit.
+    const actions = (
+      getOutboundDb()
+        .prepare("SELECT content FROM messages_out WHERE kind = 'system'")
+        .all() as Array<{ content: string }>
+    ).map((r) => JSON.parse(r.content) as Record<string, unknown>);
+    expect(actions.find((a) => a.action === 'schedule_usage_limit_retry')).toBeUndefined();
+    expect(actions.find((a) => a.action === 'queue_quota_recovery_note')).toBeDefined();
   });
 
   it('stops scheduling once the retry cap is reached', async () => {

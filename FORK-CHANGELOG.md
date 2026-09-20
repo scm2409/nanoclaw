@@ -11,6 +11,31 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-20 — a quota rejection leaves a note behind instead of vanishing
+
+The 403 night of 19.–20.09.2026 (OpenRouter monthly budget exhausted) cost the
+Deck sweep six failed ticks, and when the limit was raised the next morning
+the agent started from scratch: nothing told it that the ticks in between had
+never run — it pieced the outage together by hand from run logs, after the
+fact. The timed retry built for 429s deliberately does not cover quota (no
+interval fixes an exhausted budget; it clears when the operator raises the
+limit), and the run-health alert reaches only the human.
+
+Now a turn rejected with a quota error (402, or a 403 carrying a limit
+keyword on the same line — a bare 403 is an auth failure and gets nothing)
+writes a `queue_quota_recovery_note` system action alongside its run log. The
+host turns that into a trigger=0 inbound row: accumulated context that never
+wakes anything on its own but rides along with the next wake that happens for
+another reason. The first successful tick after the limit was raised is the
+one that reads it, which is exactly the delivery timing the situation wants —
+and the row dedupes while it sits pending, so an hours-long outage of
+15-minute ticks costs one note, not one per tick. The wording differs by
+route: a task run is told to check what its rejected runs were meant to do, a
+chat turn to ask the user to repeat what went unanswered.
+
+vibecoded with Opus 5
+
+
 ## 2026-09-18 — the sweep gate stops losing a card that never moves again
 
 The Deck sweep is gated by a script that asks the Deck API whether anything in

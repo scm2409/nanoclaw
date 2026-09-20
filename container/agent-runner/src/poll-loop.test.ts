@@ -962,6 +962,80 @@ describe('task-run turn wiring (real processQuery)', () => {
     expect(taskLogRows().map((l) => l.text)).toContain(rejected);
   });
 
+  it('queues a recovery note for a quota-rejected scheduled run, but no timed retry', async () => {
+    // A 403 budget/limit rejection clears when the operator raises the limit,
+    // not after any known interval — so no timed retry. But the rejection
+    // must not vanish either: the note rides into the first wake that happens
+    // after the limit is raised (the 403 night of 19.–20.09.2026 cost six
+    // sweep ticks and the agent only reconstructed the outage from logs).
+    const quota =
+      'Failed to authenticate. API Error: 403 Budget limit exceeded (monthly limit). Contact your org admin.';
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: quota, isError: true };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, TASK_ROUTING, ['t1'], 'claude', undefined, 'prompt', undefined);
+
+    const actions = (
+      getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'system'").all() as Array<{
+        content: string;
+      }>
+    ).map((r) => JSON.parse(r.content) as Record<string, unknown>);
+    expect(actions.find((a) => a.action === 'queue_quota_recovery_note')).toBeDefined();
+    // Waiting a fixed interval cannot fix a budget limit — no timed retry.
+    expect(actions.find((a) => a.action === 'schedule_usage_limit_retry')).toBeUndefined();
+  });
+
+  it('queues a recovery note for a quota-rejected chat turn too', async () => {
+    const quota = 'API Error: 402 Payment Required · Not enough credits';
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield { type: 'result', text: quota, isError: true };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+    const routing = {
+      platformId: 'matrix:@user:example.org',
+      channelType: 'matrix',
+      threadId: null,
+      inReplyTo: 'm1',
+      taskRun: false,
+    };
+
+    await processQuery(query, routing, ['m1'], 'claude', undefined, 'prompt', undefined);
+
+    const actions = (
+      getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'system'").all() as Array<{
+        content: string;
+      }>
+    ).map((r) => JSON.parse(r.content) as Record<string, unknown>);
+    const note = actions.find((a) => a.action === 'queue_quota_recovery_note');
+    expect(note).toBeDefined();
+    // The chat error path is unchanged: the provider's text still reaches the
+    // user, quota or not.
+    const chat = getUndeliveredMessages().filter((m) => m.kind === 'chat');
+    expect(chat.map((m) => JSON.parse(m.content).text)).toContain(quota);
+  });
+
+  it('never queues a recovery note when the turn merely quotes a quota error', async () => {
+    // A healthy turn that read a log containing the provider's error line must
+    // not arm anything — only the turn's own rejection counts.
+    async function* events(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'init', continuation: 's1' };
+      yield {
+        type: 'result',
+        text: '<message to="local-cli">the run log shows: Failed to authenticate. API Error: 403 Budget limit exceeded</message>',
+      };
+    }
+    const query: AgentQuery = { push: () => {}, end: () => {}, events: events(), abort: () => {} };
+
+    await processQuery(query, TASK_ROUTING, ['t1'], 'claude', undefined, 'prompt', undefined);
+
+    const actions = getOutboundDb().prepare("SELECT content FROM messages_out WHERE kind = 'system'").all();
+    expect(actions).toHaveLength(0);
+  });
+
   it('logs and conditionally nudges a second task run in the same open query', async () => {
     const pushes: string[] = [];
 
@@ -1255,3 +1329,4 @@ describe('settled background work (real processQuery)', () => {
     expect(nudge.length).toBeLessThan(400);
   });
 });
+
