@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Pre-agent gate for the hourly Deck sweep.
+# Pre-agent gate for the Deck sweep.
 #
 # Runs inside the agent container before any model call. Its last stdout line
 # is the contract: {"wakeAgent": false} ends the run with zero model tokens,
@@ -26,9 +26,18 @@
 # a card produces exactly one extra wake on the following tick. That is
 # intended -- it is how the agent picks work back up -- and it terminates,
 # because finished or blocked cards leave the watched stacks for Review.
+#
+# Why a delta gate is not enough on its own: a card can carry an unexecuted
+# next step -- a GO, a hand-off note, an uncollected harvest -- without ever
+# changing again. Pure delta delivers such a card exactly once; if the woken
+# instance does not act on it (deferred, cut off, container gone), no later
+# tick ever mentions it and the card waits forever. So every FORCE_FULL_EVERY
+# ticks the gate wakes the agent regardless of the fingerprint and hands it
+# every card in the watched stacks, not just the moved ones.
 set -uo pipefail
 
-# deck-sweep-gate.env defines: NC_HOST, NC_USER, BOARD_ID, WATCHED_STACKS.
+# deck-sweep-gate.env defines: NC_HOST, NC_USER, BOARD_ID, WATCHED_STACKS, and
+# optionally FORCE_FULL_EVERY.
 # Missing config is a hard failure, not a quiet "nothing to do" -- see the
 # fetch guard below for why that distinction matters here.
 # Not derived from BASH_SOURCE: the runner copies this script to /tmp before
@@ -48,6 +57,11 @@ for required in NC_HOST NC_USER BOARD_ID WATCHED_STACKS; do
   fi
 done
 
+# Ticks between forced full sweeps; 0 disables them and leaves a pure delta
+# gate. Defaulted here rather than required, so an existing config file keeps
+# working across this change.
+FORCE_FULL_EVERY=${FORCE_FULL_EVERY:-8}
+
 # Overridable so the script can be exercised outside the container
 # (`DECK_GATE_STATE=/tmp/x onecli run -- bash deck-sweep-gate.sh`).
 STATE_FILE=${DECK_GATE_STATE:-/workspace/agent/deck-sweep-gate.state}
@@ -61,11 +75,19 @@ body=$(curl -sS --fail --max-time 20 \
   -H 'Content-Type: application/json' \
   "$API") || { echo "deck-sweep-gate: fetch failed" >&2; exit 1; }
 
+# Line 1 is the fingerprint, line 2 the tick counter. A state file written by
+# the pre-counter gate has only line 1, which reads as tick 0 -- the first run
+# after the upgrade is then an ordinary delta run, not a forced sweep.
 previous=""
-[ -f "$STATE_FILE" ] && previous=$(cat "$STATE_FILE")
+ticks=0
+if [ -f "$STATE_FILE" ]; then
+  previous=$(head -1 "$STATE_FILE")
+  ticks=$(sed -n 2p "$STATE_FILE")
+fi
 
 # node, not jq/python3 -- neither is in the agent image.
-result=$(WATCHED="$WATCHED_STACKS" PREVIOUS="$previous" node -e '
+result=$(WATCHED="$WATCHED_STACKS" PREVIOUS="$previous" TICKS="$ticks" \
+  FORCE_EVERY="$FORCE_FULL_EVERY" node -e '
 let raw = "";
 process.stdin.on("data", (d) => (raw += d));
 process.stdin.on("end", () => {
@@ -94,32 +116,58 @@ process.stdin.on("end", () => {
     process.env.PREVIOUS.split("|").filter(Boolean).map((s) => [s.split(":")[0], s]),
   );
   const changed = cards.filter((c) => before.get(String(c.id)) !== c.sig);
+  const brief = (c) => ({ id: c.id, title: c.title, stack: c.stack });
 
   // An empty board is never worth a model call, even though going from
-  // two cards to none is technically a change.
-  const wake = cards.length > 0 && fingerprint !== process.env.PREVIOUS;
+  // two cards to none is technically a change -- and a forced full sweep of
+  // nothing is worth even less, so both wake paths require cards.
+  const forceEvery = Number(process.env.FORCE_EVERY) || 0;
+  const ticks = (Number(process.env.TICKS) || 0) + 1;
+  const full = cards.length > 0 && forceEvery > 0 && ticks >= forceEvery;
+  const delta = cards.length > 0 && fingerprint !== process.env.PREVIOUS;
 
-  const decision = wake
-    ? {
-        wakeAgent: true,
-        data: {
-          watchedStacks: stacks.map((s) => s.title),
-          changed: changed.map((c) => ({ id: c.id, title: c.title, stack: c.stack })),
-          unchanged: cards.length - changed.length,
-        },
-      }
-    : { wakeAgent: false };
+  let decision = { wakeAgent: false };
+  if (full) {
+    // changed stays honest (it can be empty); cards is what makes this a full
+    // sweep -- the agent is meant to re-read every one of them for an
+    // unexecuted next step, not just the moved ones.
+    decision = {
+      wakeAgent: true,
+      data: {
+        watchedStacks: stacks.map((s) => s.title),
+        fullSweep: true,
+        cards: cards.map(brief),
+        changed: changed.map(brief),
+        unchanged: cards.length - changed.length,
+      },
+    };
+  } else if (delta) {
+    decision = {
+      wakeAgent: true,
+      data: {
+        watchedStacks: stacks.map((s) => s.title),
+        changed: changed.map(brief),
+        unchanged: cards.length - changed.length,
+      },
+    };
+  }
 
-  // Line 1 is the new state for bash to persist; line 2 is the contract.
-  process.stdout.write(fingerprint + "\n" + JSON.stringify(decision) + "\n");
+  // Only a forced sweep resets the counter. A delta wake shows the agent the
+  // moved cards only, so it does not cover the gap the full sweep exists for
+  // and must not postpone it.
+  const nextTicks = full ? 0 : ticks;
+
+  // Line 1 and 2 are the new state for bash to persist; line 3 is the contract.
+  process.stdout.write(fingerprint + "\n" + nextTicks + "\n" + JSON.stringify(decision) + "\n");
 });
 ' <<< "$body") || { echo "deck-sweep-gate: parse failed" >&2; exit 1; }
 
 fingerprint=$(printf '%s\n' "$result" | head -1)
+next_ticks=$(printf '%s\n' "$result" | sed -n 2p)
 decision=$(printf '%s\n' "$result" | tail -1)
 
 # Persist before deciding: a wake that isn't recorded repeats forever.
 mkdir -p "$(dirname "$STATE_FILE")"
-printf '%s' "$fingerprint" > "$STATE_FILE"
+printf '%s\n%s' "$fingerprint" "$next_ticks" > "$STATE_FILE"
 
 echo "$decision"

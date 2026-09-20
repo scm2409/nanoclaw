@@ -11,6 +11,38 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-18 — the sweep gate stops losing a card that never moves again
+
+The Deck sweep is gated by a script that asks the Deck API whether anything in
+the watched stacks changed, and skips the model call when nothing did. That
+saved most of the daily wakes, but it delivered each card exactly once per
+change — and the continuation rule written the same day depends on the
+opposite. A card can carry an unexecuted next step (a GO, a hand-off note, an
+uncollected harvest) without ever changing again: the tick after the comment
+lands mentions it, and if that run does not act on it — deferred, cut off, the
+container gone — no later tick ever mentions it, so the card waits forever for
+a run that was already there.
+
+The gate now keeps a tick counter alongside the fingerprint in its state file
+and forces a full sweep every `FORCE_FULL_EVERY` ticks (default 8, about two
+hours at the current schedule), regardless of whether anything moved. Such a
+run is marked `fullSweep: true` and carries every card in the watched stacks in
+`cards`, not just the moved ones; the sweep prompt tells the agent that this is
+the run in which it re-reads all of them for an unexecuted next step. Only a
+forced sweep resets the counter — a delta wake shows the moved cards alone and
+therefore does not cover the gap the full sweep exists for. An empty board
+still wakes nothing, `FORCE_FULL_EVERY=0` returns the old pure-delta behaviour,
+and a state file written by the previous gate reads as tick 0, so the upgrade
+is silent.
+
+The gate script had no tests. It has eight now, driving the real script against
+a fixture Deck API served from a child process — the gate is bash plus an
+embedded node program plus a state file, and the parts most likely to break
+only exist in that composition. Vitest picks up `groups/*/scripts/**` for it,
+since group scripts are tracked in this fork.
+
+vibecoded with Opus 5
+
 ## 2026-09-18 — a Deck card that nobody is left to drive
 
 A long-running project is anchored on its Deck card, but the card was never
