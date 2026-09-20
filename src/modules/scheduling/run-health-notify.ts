@@ -12,6 +12,7 @@ import { getAgentGroup } from '../../db/agent-groups.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
 import { containerLogDir } from '../../container-logs.js';
+import { pickGroupChatDelivery } from '../notification-targets.js';
 import { pickApprover, pickApprovalDelivery } from '../approvals/primitive.js';
 
 export interface RunHealthAlert {
@@ -55,6 +56,15 @@ export async function notifyRunHealth(alert: RunHealthAlert): Promise<void> {
     return;
   }
 
+  const agentName = getAgentGroup(alert.agentGroupId)?.name ?? alert.agentGroupId;
+  const groupTarget = pickGroupChatDelivery(alert.agentGroupId);
+
+  if (groupTarget) {
+    log.warn('Task-run failure streak — notifying', { ...alert, approver: groupTarget.platformId });
+    await deliverAlert(adapter, groupTarget.channelType, groupTarget.platformId, alert, agentName);
+    return;
+  }
+
   const approvers = pickApprover(alert.agentGroupId);
   const target = await pickApprovalDelivery(approvers, '');
   if (!target) {
@@ -62,13 +72,21 @@ export async function notifyRunHealth(alert: RunHealthAlert): Promise<void> {
     return;
   }
 
-  const agentName = getAgentGroup(alert.agentGroupId)?.name ?? alert.agentGroupId;
   log.warn('Task-run failure streak — notifying', { ...alert, approver: target.userId });
+  await deliverAlert(adapter, target.messagingGroup.channel_type, target.messagingGroup.platform_id, alert, agentName);
+}
 
+async function deliverAlert(
+  adapter: NonNullable<ReturnType<typeof getDeliveryAdapter>>,
+  channelType: string,
+  platformId: string,
+  alert: RunHealthAlert,
+  agentName: string,
+): Promise<void> {
   try {
     await adapter.deliver(
-      target.messagingGroup.channel_type,
-      target.messagingGroup.platform_id,
+      channelType,
+      platformId,
       null,
       'chat-sdk',
       JSON.stringify({ text: formatRunHealthAlert(alert, agentName) }),

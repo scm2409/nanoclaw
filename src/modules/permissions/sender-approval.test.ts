@@ -163,7 +163,7 @@ describe('unknown-sender request_approval flow', () => {
     expect(deliverMock).toHaveBeenCalledTimes(1);
     const [channel, platformId, thread, kind, content] = deliverMock.mock.calls[0];
     expect(channel).toBe('telegram');
-    expect(platformId).toBe('dm-owner'); // delivered to owner's DM
+    expect(platformId).toBe('chat-123'); // delivered to the group's own chat — the room the approver reads, not a private DM
     expect(thread).toBeNull();
     expect(kind).toBe('chat-sdk');
     const payload = JSON.parse(content as string);

@@ -76,7 +76,7 @@ export async function requestSenderApproval(input: RequestSenderApprovalInput): 
 
   const originMg = getMessagingGroup(messagingGroupId);
   const originChannelType = originMg?.channel_type ?? '';
-  const target = await pickApprovalDelivery(approvers, originChannelType);
+  const target = await pickApprovalDelivery(approvers, originChannelType, agentGroupId);
   if (!target) {
     log.warn('Unknown-sender approval skipped — no DM channel for any approver', {
       messagingGroupId,

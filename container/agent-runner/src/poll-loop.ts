@@ -677,7 +677,10 @@ export async function processQuery(
         // the batch waits makes the queued note redundant (checked at flush).
         if (!turnActive && worthWakingFor(event)) queueSettledTask(event.summary);
       } else if (event.type === 'subagent') {
-        if (logSubagents) deliverSubagentNotice(event, routing);
+        // Task sessions have no routing (no messaging group), so these
+        // notices die at delivery with "Message missing routing fields" —
+        // emitted, transported, dropped. Don't write them at all.
+        if (logSubagents && !routing.taskRun) deliverSubagentNotice(event, routing);
       } else if (event.type === 'error') {
         if (event.classification) {
           lastRateLimitClassification = event.classification;
@@ -694,7 +697,10 @@ export async function processQuery(
         setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
         turnActive = false;
-        if (showTokenUsage && event.modelUsage) deliverTokenUsageNotice(event.modelUsage, routing);
+        // Token summaries are for the operator's own chat — a task session
+        // has no routing to deliver them on, so skip the write entirely.
+        if (showTokenUsage && event.modelUsage && !routing.taskRun)
+          deliverTokenUsageNotice(event.modelUsage, routing);
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
         // stale 'processing' claims while the query stays open for

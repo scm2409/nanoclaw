@@ -22,7 +22,7 @@
  * if either module becomes genuinely optional (see REFACTOR_PLAN open q #3).
  */
 import { normalizeOptions, type RawOption } from '../../channels/ask-question.js';
-import { getMessagingGroup } from '../../db/messaging-groups.js';
+import { getMessagingGroup, getMessagingGroupByPlatform } from '../../db/messaging-groups.js';
 import { createPendingApproval, deletePendingApproval, getSession } from '../../db/sessions.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { wakeContainer } from '../../container-runner.js';
@@ -31,6 +31,7 @@ import { writeSessionMessage } from '../../session-manager.js';
 import type { MessagingGroup, PendingApproval, Session } from '../../types.js';
 import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from '../permissions/db/user-roles.js';
 import { ensureUserDm } from '../permissions/user-dm.js';
+import { pickGroupChatDelivery } from '../notification-targets.js';
 
 /**
  * Card value for the "Reject with reason…" button. Selecting it doesn't
@@ -162,11 +163,25 @@ export function pickApprover(agentGroupId: string | null): string[] {
  * Tie-break: prefer approvers reachable on the same channel kind as the
  * origin; else first in list. Resolution uses ensureUserDm, which may
  * trigger a platform openDM call on cache miss.
+ *
+ * With `agentGroupId` set, the group's own chat wins outright when it has a
+ * notice-carrying channel destination — approval requests are operational
+ * chatter, and the operator reads the room the agent posts to, not a private
+ * DM (see notification-targets.ts). The recorded userId is the first
+ * approver on the list; the room is not theirs alone.
  */
 export async function pickApprovalDelivery(
   approvers: string[],
   originChannelType: string,
+  agentGroupId?: string | null,
 ): Promise<{ userId: string; messagingGroup: MessagingGroup } | null> {
+  if (agentGroupId) {
+    const groupChat = pickGroupChatDelivery(agentGroupId);
+    if (groupChat) {
+      const mg = getMessagingGroupByPlatform(groupChat.channelType, groupChat.platformId);
+      if (mg) return { userId: approvers[0] ?? '', messagingGroup: mg };
+    }
+  }
   if (originChannelType) {
     for (const userId of approvers) {
       if (channelTypeOf(userId) !== originChannelType) continue;

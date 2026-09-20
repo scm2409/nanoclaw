@@ -1372,3 +1372,16 @@ describe('settled background work (real processQuery)', () => {
     expect(nudge.length).toBeLessThan(400);
   });
 });
+
+describe('token usage notice — task sessions', () => {
+  it('never writes a token notice from a task session (no routing to deliver it on)', async () => {
+    // Task sessions have no messaging group; the host drops these notices
+    // with "Message missing routing fields". 1,700 of them piled up in the
+    // sweep session undelivered before the write was skipped at the source.
+    const { query } = makeTokenUsageQuery({ sonnet: usage(1000, 200, 50, 0.08, 600) });
+
+    await processQuery(query, TASK_ROUTING, ['t1'], 'claude', undefined, 'prompt', undefined, false, true);
+
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+});

@@ -129,8 +129,9 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
   }
 
   // No origin channel preference — OneCLI requests don't carry one. First
-  // approver with a reachable DM wins.
-  const target = await pickApprovalDelivery(approvers, '');
+  // approver with a reachable DM wins; the group's own chat comes first when
+  // the group has a notice-carrying channel destination.
+  const target = await pickApprovalDelivery(approvers, '', agentGroupId ?? undefined);
   if (!target) {
     log.warn('OneCLI approval auto-denied: no DM channel for any approver', {
       id: request.id,

@@ -11,6 +11,21 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-20 — approval requests reach the operator where the operator reads
+
+Approval delivery (`pickApprovalDelivery`) resolved a private DM per approver,
+and with it parked OneCLI approval requests, channel registrations and
+unknown-sender cards in the same stale 1:1 room the run-health alerts had
+vanished into. With the originating agent group in scope, the group's own
+chat now wins outright when it has a notice-carrying channel destination —
+the same resolution run-health uses, extracted into
+`src/modules/notification-targets.ts`. The DM flow stays as the fallback when
+a group has no such destination. Click authorization is unchanged: buttons
+carry the clicking user's platform id and the handler verifies the approver
+role, so a card in a group room is no wider open than one in a DM.
+
+vibecoded with Opus 5
+
 ## 2026-09-20 — a rejected chat turn is not a finished one
 
 When a turn ended on a provider error, the poll loop marked its whole message
