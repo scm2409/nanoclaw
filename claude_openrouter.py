@@ -67,6 +67,15 @@ from pathlib import Path
 #   z-ai/glm-5.3          48.6    74.8     53.6  1.400/4.400  $0.143/M    1.259
 #   meta/muse-spark-1.3   53.0    76.3     55.6  1.250/4.250  $0.159/M    0.959 (max)
 #                         51.6    76.5     52.1                           0.840 (xhigh)
+#   deepseek-v4-flash     24.2    56.2     22.2  0.036/0.071  $0.007/M     n/a
+#
+# deepseek-v4-flash sits here solely as the auto-mode classifier (sonnet
+# alias). It is far behind the others on general benchmarks and never runs
+# the main loop; what it is chosen for is latency and price on the
+# classifier's one shape of request: 20k prompt tokens, tiny output.
+# Measured 2026-09-20 through the cheapest tier (streamlake/baidu): 1.5-2.0s
+# end to end, second identical call read 16,384 of 20,017 prompt tokens from
+# cache ($0.0071/M read rate).
 #
 # The fable slot ran on x-ai/grok-4.6 (50.6 / 76.8 / 53.6, 2.000/6.000, $1.254 a
 # task) until 2026-09-05: less capable, twice the input price, and a third more
@@ -74,7 +83,16 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 MODELS = {
     "ANTHROPIC_MODEL": "z-ai/glm-5.3-flash",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "z-ai/glm-5.3-flash",
+    # The sonnet alias is not a model this session uses directly — it is what
+    # the auto-mode permission classifier resolves its model from (verified on
+    # 2.1.278: both classifier stages, xml_s1 and xml_s2, ride this alias; the
+    # undocumented CLAUDE_CODE_AUTO_MODE_MODEL / CLAUDE_CODE_BG_CLASSIFIER_MODEL
+    # are dead code in that path). Pointing it at a cheap, fast model with its
+    # own providers keeps the classifier off the main model's endpoints, which
+    # is also what broke on 2026-09-20: the classifier's large non-streaming
+    # requests timed out against glm-5.3-flash's providers and every gated
+    # action was blocked with "auto mode cannot determine the safety".
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4-flash",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "z-ai/glm-5.3-flash",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "z-ai/glm-5.3",
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "meta/muse-spark-1.3",

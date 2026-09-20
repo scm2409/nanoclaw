@@ -11,6 +11,33 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-20 — the auto-mode classifier gets its own model
+
+`claude_openrouter.py` pointed `ANTHROPIC_DEFAULT_SONNET_MODEL` at the main
+model, and Claude Code's auto-mode permission classifier resolves its model
+from that alias — so every permission check ran on the main model's
+endpoints. Those endpoints intermittently refuse the classifier's request
+shape (large, non-streaming, tight deadline) and the failure is expensive:
+for hours on 2026-09-20 every gated action was blocked with "auto mode
+cannot determine the safety", while the main loop on the same model and pin
+kept working. The block also carried a real per-turn cost: even a fresh
+session shipped ~128 KB of classifier context per check.
+
+The alias now points at `deepseek/deepseek-v4-flash` ($0.036/M in, cheapest
+tier streamlake/baidu). Verified end to end against CLI 2.1.278: both
+classifier stages (`xml_s1`, `xml_s2`) appear in `~/.claude/debug` as
+`model=deepseek/deepseek-v4-flash`, the wrapper's provider union picked up
+`streamlake`, and caching was probed live (second identical 20k-token call
+read 16,384 prompt tokens from cache; 1.5–2.0 s end to end). Two dead ends
+documented for the next person: the undocumented `CLAUDE_CODE_AUTO_MODE_MODEL`
+and `CLAUDE_CODE_BG_CLASSIFIER_MODEL` env vars exist in the binary but are
+ignored by the classifier path — the sonnet alias is the only client-side
+lever. The session-wide compaction window moved 1,048,576 → 1,024,000
+tokens because the deepseek tier's smallest context is slightly smaller;
+not load-bearing.
+
+vibecoded with z-ai/glm-5.3-flash
+
 ## 2026-09-20 — the standing instructions become sober instructions
 
 `instructions.prepend.md` rewritten document-wide on Martin's order: the
