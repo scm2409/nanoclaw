@@ -11,6 +11,26 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-25 — token and subagent notices reach Matrix again
+
+No token summary reached KaiL01's Matrix room after 2026-09-20. A container's
+routing is taken from the first message of its first batch and kept for the
+whole container lifetime, and since that evening every Matrix container began
+with the host's own note ("your previous container was stopped ...", an
+agent-channel row addressed to the group itself) in front of Martin's message.
+The route therefore read as agent-to-agent, and the guard that stops notices
+from looping back into a self-route silently dropped every token and subagent
+notice — the persisted token baseline shows the notice function was not called
+once in five days. Why the notes started leading every batch that evening is
+not provable any more (the container logs of that time are rotated out).
+
+`extractRouting` now skips the group's own notes when a real message follows
+them. A batch of nothing but such notes keeps the agent route, and a message
+from another agent group is never skipped, so the loop guard is unchanged.
+Tests in `poll-loop.test.ts`; verified live by forcing a note-first batch.
+
+vibecoded with Claude Opus 5.5
+
 ## 2026-09-25 — model profiles, and KaiL01 moves to the Anthropic API
 
 Which API and which models the agents use was spread over four places — the

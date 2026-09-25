@@ -115,10 +115,20 @@ export interface RoutingContext {
 
 /**
  * Extract routing context from a batch of messages.
- * Uses the first message's routing fields.
+ *
+ * Uses the first message's routing fields — except that the host's own notes
+ * to this group (agent-channel rows addressed to `selfAgentGroupId`, e.g.
+ * "your previous container was stopped ...") are skipped when a real message
+ * follows them. Those notes ride along with the next human message, and
+ * routing by them made the batch look agent-to-agent, which silences every
+ * notice to the operator's chat. A batch of nothing but such notes keeps the
+ * agent route, so a self-route can never deliver notices back into its own
+ * inbound queue.
  */
-export function extractRouting(messages: MessageInRow[]): RoutingContext {
-  const first = messages[0];
+export function extractRouting(messages: MessageInRow[], selfAgentGroupId?: string): RoutingContext {
+  const isSelfNote = (m: MessageInRow) =>
+    selfAgentGroupId !== undefined && m.channel_type === 'agent' && m.platform_id === selfAgentGroupId;
+  const first = messages.find((m) => !isSelfNote(m)) ?? messages[0];
   return {
     platformId: first?.platform_id ?? null,
     channelType: first?.channel_type ?? null,

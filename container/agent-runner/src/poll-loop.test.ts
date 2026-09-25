@@ -218,6 +218,47 @@ describe('routing', () => {
     expect(routing.inReplyTo).toBe('m1');
   });
 
+  // The host writes its own notes ("your previous container was stopped ...")
+  // as agent-channel rows addressed to the group itself, and they ride along
+  // with the next human message. Routing by the first row then made the whole
+  // container's turns look agent-to-agent, and every token/subagent notice to
+  // the operator's chat was dropped (none reached Matrix from 2026-09-20 on).
+  function insertRouted(id: string, platformId: string, channelType: string): void {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, content)
+         VALUES (?, 'chat', datetime('now'), 'pending', ?, ?, '{"text":"x"}')`,
+      )
+      .run(id, platformId, channelType);
+  }
+
+  it('routes past the host\'s own note to the human message behind it', () => {
+    insertRouted('note', 'ag-self', 'agent');
+    insertRouted('human', 'room-1', 'matrix');
+
+    const routing = extractRouting(getPendingMessages(), 'ag-self');
+    expect(routing.channelType).toBe('matrix');
+    expect(routing.platformId).toBe('room-1');
+    expect(routing.inReplyTo).toBe('human');
+  });
+
+  it('keeps a batch of only the host\'s own notes on the agent route', () => {
+    // A self-route must stay a self-route: that is what stops a restart
+    // message from seeding a notice loop into its own inbound queue.
+    insertRouted('note', 'ag-self', 'agent');
+
+    expect(extractRouting(getPendingMessages(), 'ag-self').channelType).toBe('agent');
+  });
+
+  it('does not skip a message from another agent group', () => {
+    insertRouted('peer', 'ag-other', 'agent');
+    insertRouted('human', 'room-1', 'matrix');
+
+    const routing = extractRouting(getPendingMessages(), 'ag-self');
+    expect(routing.channelType).toBe('agent');
+    expect(routing.inReplyTo).toBe('peer');
+  });
+
   it('carries a recurring task\'s cron so a retry can be weighed against it', () => {
     // A retry that lands after the series would have fired again is not a
     // retry, it is a second run of work the schedule already covers.

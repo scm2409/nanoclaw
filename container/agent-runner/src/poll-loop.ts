@@ -37,6 +37,7 @@ import {
   stripInternalTags,
   type RoutingContext,
 } from './formatter.js';
+import { getConfig } from './config.js';
 import { RATE_LIMIT_BACKOFF_MS, planRateLimitRetry } from './rate-limit-retry.js';
 import { isQuotaRejection, quotaRecoveryNoteText } from './quota-recovery-note.js';
 import { isTurnSend, markTurnStart, turnSendKeys } from './turn-sends.js';
@@ -120,6 +121,15 @@ function getRetryCount(messages: MessageInRow[]): number {
  * is no human watching an agent-to-agent route anyway, so dropping the
  * notice loses nothing.
  */
+/** This container's agent group id, or undefined when no config is loaded (unit tests). */
+function ownAgentGroupId(): string | undefined {
+  try {
+    return getConfig().agentGroupId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isAgentToAgentRoute(routing: RoutingContext): boolean {
   return routing.channelType === 'agent';
 }
@@ -239,7 +249,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     const ids = messages.map((m) => m.id);
     markProcessing(ids);
 
-    const routing = extractRouting(messages);
+    const routing = extractRouting(messages, ownAgentGroupId());
 
     // Command handling: the host router gates filtered and unauthorized
     // admin commands before they reach the container. The only command
@@ -574,7 +584,7 @@ export async function processQuery(
         // iteration). Same incident: outbound seq 941 stamped in_reply_to
         // against the message that opened the stream instead of the one it
         // actually answered.
-        setCurrentInReplyTo(extractRouting(keep).inReplyTo);
+        setCurrentInReplyTo(extractRouting(keep, ownAgentGroupId()).inReplyTo);
         query.push(prompt);
         archivePrompts.push(prompt);
         // Claimed, not completed. Handing a message to the stream is not the
