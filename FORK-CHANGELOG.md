@@ -76,6 +76,31 @@ now uses the Matrix Authentication Service, and `/delete_devices` answers
 
 vibecoded with Claude Opus 5.5
 
+## 2026-09-25 — dev-box coding tools become skills of the software engineer
+
+How to drive the dev box's coding tools used to live in two how-to files in
+KaiL01's private memory. The `software-engineer` subagent read them only when
+KaiL01 pointed it there in an order. Meanwhile the subagent's own
+definition still described OpenCode as the only tool, with its commands, its
+agents and their models written into the text.
+
+The how now lives in two container skills: `devbox-claude-code` (headless
+call, reading `is_error` rather than the exit code, usage limit versus
+throttle, model and effort, plan mode, subagents, permissions, MCP, where
+knowledge goes) and `devbox-opencode` (call, build/plan/hard-case agents
+and their models, the global rules, permissions, MCP, the spend-limit
+stop). The Claude Code skill keeps project knowledge in the same
+`AGENTS.md` OpenCode reads: since v2.1.277 Claude Code reads it natively, as
+long as no `CLAUDE.md` sits in the project or above it. `software-engineer`
+preloads both through `skills:` in its
+frontmatter, the same way `nextcloud` and `dokuwiki` load theirs. Its body is
+now tool-neutral: Claude Code is the default, OpenCode runs only on order,
+and runs live under `$HOME`, never in the dev box's tmpfs `/tmp`. The
+skills are public, so they name no host, account or chat detail; those
+stay in the local facts and in the now-short memory files.
+
+vibecoded with Claude Opus 5.5
+
 ## 2026-09-25 — KaiL01's engineer defaults to Claude Code on the dev box
 
 KaiL01's standing instructions for the `software-engineer` subagent named

@@ -185,8 +185,8 @@ there.
 
    Set `run_in_background: false` yourself only for the rare order that is
    over in seconds *and* whose result you need before you can say anything at
-   all. Everything that builds, tests, runs an emulator, drives OpenCode or
-   touches the dev box is never that case.
+   all. Everything that builds, tests, runs an emulator, drives the coding
+   tool or touches the dev box is never that case.
 
    While an agent runs in the background you stay answerable: reply to
    Martin, take new orders, start further agents. Never report its work as
@@ -517,14 +517,13 @@ tool on the dev box, verifies what comes back, and keeps the project in git.
 **The coding tool is Claude Code until Martin says otherwise.** His order
 of 25.09.2026 made it the default; OpenCode stays installed as the fallback
 and is never removed. Switching back is his call alone — a stranded or
-limit-hit Claude Code run is reported, not rerouted to OpenCode. Invocation,
-model and effort, permissions, subagents and MCP live in
-`/workspace/agent/memory/howto/devbox-claude-code-workflow.md`, the OpenCode
-counterpart in `devbox-opencode-workflow.md` beside it; point the engineer
-there instead of restating them. On either tool, mandates, logs, reports and
-session ids **never go to `/tmp`** on the dev box — it is tmpfs, emptied on
-reboot, and has already cost real work; they go under `$HOME` or into the
-project.
+limit-hit Claude Code run is reported, not rerouted to OpenCode. How to
+drive each tool — invocation, model and effort, permissions, subagents, MCP,
+limits — is in the engineer's preloaded skills `devbox-claude-code` and
+`devbox-opencode`; do not restate it in orders. On either tool, mandates,
+logs, reports and session ids **never go to `/tmp`** on the dev box — it is
+tmpfs, emptied on reboot, and has already cost real work; they go under
+`$HOME` or into the project.
 
 Delegate to it for: starting a new project, adding a feature, fixing a bug,
 refactoring, writing or running tests, building, running a service or
@@ -559,7 +558,8 @@ any code, the subagent states: the interaction model, the chosen
 framework/libraries with a one-line rationale, the verification environment
 and how success will be observed. No pseudo-workarounds without Martin's
 explicit approval. A throwaway POC may skip the research — never the
-decision. OpenCode carries the `poc-architecture` skill on the dev box.
+decision. On the dev box the recipe is OpenCode's `poc-architecture`
+skill; Claude Code does not read OpenCode's skills.
 
 What comes back matters: commits made, `Assumptions` worked under, `Open
 questions` needing answers, and under `Blocked on Martin` anything needing
@@ -593,11 +593,11 @@ Knowledge on the dev box has three homes, and they are not interchangeable:
 
 - **Project-specific operational knowledge** (build commands, paths, test
   procedures, project conventions) → the repo's `AGENTS.md`, versioned with
-  the project. Never into a global skill. OpenCode reads it automatically.
-- **Cross-project reusable task recipes** → OpenCode skills under
-  `~/.config/opencode/skills/`. The subagent writes those itself and says so
-  in its report.
-- **Access to external tools/data** → MCP servers in the OpenCode config.
+  the project and shared by both coding tools. Never into a global skill.
+- **Cross-project reusable task recipes** → the coding tool's own skills on
+  the dev box. The subagent writes those itself and says so in its report.
+- **Access to external tools/data** → MCP servers in the coding tool's
+  config.
 
 When ordering the engineer, name the right home instead of saying "create a
 skill if needed".
@@ -691,10 +691,11 @@ behind those tiers are deliberately not listed here — they change, and a
 stale list is worse than none; read the subagent file or
 `ncl groups config get` when the actual model matters.
 
-1. **Software implementation belongs on the dev box.** OpenCode there runs
-   on its own budget. Escalate into KaiL's own subagents only for diagnosis,
-   design, and verification — not for bulk implementation. If OpenCode
-   strands, diagnose the strand cause instead of routing around it.
+1. **Software implementation belongs on the dev box.** The coding tool
+   there runs on its own budget. Escalate into KaiL's own subagents only for
+   diagnosis, design, and verification — not for bulk implementation. If the
+   coding tool strands, diagnose the strand cause instead of routing around
+   it.
 2. **Fresh subagent per focused question.** Never resume one heavy subagent
    across many phases; each resume re-reads the whole accumulated
    transcript. Split by deliverable.
