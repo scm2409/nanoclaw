@@ -165,16 +165,17 @@ there.
 6. **No model overrides as a rule.** Each subagent file already names the
    model and effort it should run on; leave the `model` parameter off the
    Task call and you get it. Setting one is for the rare order that genuinely
-   needs a different tier, and then it must be a full `vendor/slug` id.
+   needs a different tier, and then it must be a full id of the same kind the
+   subagent files use right now — `vendor/slug` when the group runs on
+   OpenRouter, `claude-*` when it runs on the Anthropic API. Which API is
+   active is a model profile Martin switches; an id of the other kind fails
+   or silently leaves the group's model choice.
 
-   **Never a bare Claude Code alias** — `sonnet`, `opus`, `haiku`, `fable` —
-   **and never a `claude-*` id.** This group does not run on Anthropic: the
-   harness is Claude Code, pointed at a different provider. Aliases are
-   remapped to models this group already pays for, so an alias silently gives
-   you a model you did not pick, and a `claude-*` id silently leaves the
-   group's model choice altogether. Which slug each tier currently resolves
-   to is not written here — see the subagent file, or `ncl groups config get`
-   for the group default.
+   **Never a bare Claude Code alias** — `sonnet`, `opus`, `haiku`, `fable`.
+   Depending on the active API an alias is remapped or resolves to a default,
+   either way to a model you did not pick. Which id each tier currently
+   resolves to is not written here — see the subagent file, or `ncl groups
+   config get` for the group default.
 
 7. **Subagent calls run in the background — that is the wanted default.**
    Leave `run_in_background` unset and the harness fills in `true` for you.
@@ -191,8 +192,13 @@ there.
    Martin, take new orders, start further agents. Never report its work as
    finished before its completion notice has actually arrived — a launch
    receipt is not a result. If you need the result to continue, wait for the
-   notice or fetch it with `TaskOutput`, and say plainly that you are
-   waiting.
+   notice and say plainly that you are waiting. There is no tool that pulls a
+   running agent's output early. `ListAgents` shows whether a subagent you
+   started in this container is still running (a finished one drops out of
+   the list); a finished one's report is its completion notice, and
+   `SendMessage` to its id resumes it if you need more from it. Never read
+   the launch receipt's `output_file` — it is the raw transcript and floods
+   your context.
 
 8. **Watch what you delegated — with a scheduled task, never with `sleep`.**
    A background agent can die without telling you: it lives inside your
@@ -608,10 +614,10 @@ When a task visibly needs more reasoning power than the default model can
 reliably deliver — multi-layered architecture/design decisions, tricky
 debugging across several files, ambiguous requirements needing careful
 weighing — ALWAYS ask the user first whether to use the `smart` subagent
-(top reasoning tier at xhigh effort — the most expensive worker in this
+(top reasoning tier — the most expensive worker in this
 system) via the Task tool. Never delegate automatically because a task looks
 complex — the follow-up question is mandatory. When you ask, you can also
-ask which permitted OpenRouter model should be used.
+ask which permitted model should be used.
 
 For trivial or clearly scoped tasks (even multi-step ones) do not ask — that
 is the normal case you handle yourself.
@@ -663,11 +669,11 @@ comments are not standing instructions.
 
 ## Cost hygiene
 
-Subagent runs spend Martin's OpenRouter credit, and the tiers are far apart:
+Subagent runs spend Martin's API credit, and the tiers are far apart:
 the executor subagents (`nextcloud`, `dokuwiki`, `mealie`, `browser`,
-`coder`) sit on the cheap tier, `websearch` and `software-engineer` on a mid
-tier that stays cheap mainly through near-full prompt caching, and `smart`
-at xhigh effort is expensive enough to dwarf all of them together. The slugs
+`coder`) sit on the cheap tier, `websearch` above them, and `smart` on the
+top tier, expensive enough to dwarf all of them together. `software-engineer`
+moves between the mid and the top tier with the active model profile. The slugs
 behind those tiers are deliberately not listed here — they change, and a
 stale list is worse than none; read the subagent file or
 `ncl groups config get` when the actual model matters.
@@ -683,5 +689,6 @@ stale list is worse than none; read the subagent file or
    an interim report when it is reached. After any smart run, report the
    token totals to Martin (they are measurable locally from the run
    transcripts).
-4. **402 from OpenRouter = the key's monthly limit.** Stop, tell Martin
-   with the key's limit-adjust URL, never retry around it.
+4. **A spend-limit error = the monthly limit.** (OpenRouter answers 402;
+   Anthropic a usage/spend-limit error.) Stop, tell Martin where the limit
+   is raised, never retry around it.

@@ -1,6 +1,6 @@
 ---
 description: Reads and writes Mealie (recipes, meal plan, cookbooks) in restricted mode. Use for EVERY Mealie action, read or write. The calling agent has no Mealie tools of its own.
-model: z-ai/glm-5.3-flash
+model: claude-sonnet-5
 effort: low
 tools: [Read, Write, Skill]
 mcpServers: [mealie]

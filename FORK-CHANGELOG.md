@@ -11,6 +11,67 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-25 — model profiles, and KaiL01 moves to the Anthropic API
+
+Which API and which models the agents use was spread over four places — the
+install-wide `ANTHROPIC_BASE_URL` in `.env`, each group's `model`/`effort` in
+the DB, and the `model:`/`effort:` frontmatter of every file subagent — with no
+way to save one setup and come back to it. `scripts/model-profile.ts` now does
+that: `save <name>` snapshots the live setup into
+`config/model-profiles/<name>.json`, `apply <name> [--dry-run]` switches all of
+it in one step (the `.env` line is commented out for Anthropic direct and
+restored byte for byte on the way back, DB writes go through `ncl`, subagent
+files have only their two frontmatter lines rewritten), and `show` names the
+profile the install is on. The pure helpers are covered by
+`scripts/model-profile.test.ts`; the operator workflow is the new
+`/switch-model-profile` skill, which `/update-agent-models` and
+`/configure-openrouter-claude-code` now point to.
+
+Two profiles are saved. `openrouter` is the setup as it stood this morning (GLM
+5.3 Flash main and executors, GPT-5.6 Sol for `smart`, GPT-5.6 Luna for
+`websearch` and `software-engineer`, StepFun Step 3.7 Flash for the Matrix live
+test group). `anthropic` is now active for at least a month: Claude Sonnet 5 for
+the main thread (medium), the executors (low) and `websearch` (high), Claude Opus
+5.5 at high for `smart` and `software-engineer`. No Haiku: Claude Haiku 4.5
+rejects the effort parameter. The switch is install-wide, so the Matrix live
+test group moved to Sonnet 5 as well. The OpenRouter-only machinery — alias
+remap, provider pins, sticky routing — switches itself off on bare `claude-*`
+ids; measured on the first turns: status 200 from Anthropic, 47k of 52k prompt
+tokens read from cache on the second call.
+
+Opus 5.5 needs Claude Code 2.1.280 or newer; the container had 2.1.197 and
+answered every `smart` call with a 400. `container/cli-tools.json` now pins
+`@anthropic-ai/claude-code@2.1.280`, three days after its release — a
+deliberate, owner-approved exception to the one-week release-age rule. The bump
+moved the tool surface: `TaskOutput` is gone from the wire, `ListAgents` and
+`Monitor` are new and allowed, `PushNotification` and `RemoteTrigger` are new
+and disallowed (no paired phone, no cloud account in a container).
+`claude.tool-surface.test.ts` pins the 2.1.280 names read from a live trace.
+
+`TaskOutput` had 304 recorded calls, so its removal (Claude Code 2.1.277) is not
+cosmetic. Background agents now report only through their automatic completion
+notice; `ListAgents` shows whether one is still running, and `SendMessage`
+resumes a finished one (both verified live). KaiL01's standing instructions
+said to fetch results with `TaskOutput` and now describe that instead. Their
+model-override rule also said "never a `claude-*` id, this group does not run on
+Anthropic" — it now asks for an id of the kind the active profile uses.
+
+Upstream made the same bump on 2026-09-23 (nanocoai/nanoclaw `ee0f0adf`) with two
+more fixes, ported here together with its Agent SDK bump to exactly 0.3.280
+(same owner-approved release-age exception): the system-prompt append is sent
+with `snapshot: false`, because since 2.1.267 Claude Code records it on a
+session's first request and a resumed session would keep a stale agent name and
+destination list until compaction; and the claude.ai skill/plugin sync added in
+2.1.275 is switched off via flag-level settings. Covered by
+`claude.system-prompt.test.ts`; verified live that the prompt cache still holds
+across a restart (the append carries no timestamps).
+
+Model names and the OpenRouter credit had leaked into prompt prose — `smart`
+called itself "gpt-5.6-sol xhigh", the standing instructions spoke of
+"OpenRouter credit" and "402 from OpenRouter". Both are provider-neutral now.
+
+vibecoded with Claude Opus 5 and Claude Opus 5.5
+
 ## 2026-09-23 — software-engineer: plan-first mandates for new features
 
 The `software-engineer` subagent now gives every new feature a two-phase

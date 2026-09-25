@@ -228,6 +228,9 @@ the alternative.
 The main agent's model and effort live in the DB; subagents live in tracked
 files. Both, or the group is inconsistent.
 
+Save the current setup first — `pnpm exec tsx scripts/model-profile.ts save <name>`
+(see `/switch-model-profile`) — so the old picks stay one `apply` away.
+
 ```bash
 ncl groups config update --id <group-id> --model <picked> --effort <low|medium|high|max>
 ```

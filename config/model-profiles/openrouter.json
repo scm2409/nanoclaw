@@ -1,0 +1,48 @@
+{
+  "description": "OpenRouter via the Claude Code harness (state until 2026-09-25): GLM 5.3 Flash main + executors, GPT-5.6 Sol/Luna for escalation, research and software work. Provider pins and sticky routing apply automatically.",
+  "anthropicBaseUrl": "https://openrouter.ai/api",
+  "groups": {
+    "_matrix-live-test": {
+      "model": "stepfun/step-3.7-flash",
+      "effort": "low"
+    },
+    "main-agent": {
+      "model": "z-ai/glm-5.3-flash",
+      "effort": "medium",
+      "subagents": {
+        "browser": {
+          "model": "z-ai/glm-5.3-flash",
+          "effort": "low"
+        },
+        "coder": {
+          "model": "z-ai/glm-5.3-flash",
+          "effort": "low"
+        },
+        "dokuwiki": {
+          "model": "z-ai/glm-5.3-flash",
+          "effort": "medium"
+        },
+        "mealie": {
+          "model": "z-ai/glm-5.3-flash",
+          "effort": "low"
+        },
+        "nextcloud": {
+          "model": "z-ai/glm-5.3-flash",
+          "effort": "medium"
+        },
+        "smart": {
+          "model": "openai/gpt-5.6-sol",
+          "effort": "xhigh"
+        },
+        "software-engineer": {
+          "model": "openai/gpt-5.6-luna",
+          "effort": "max"
+        },
+        "websearch": {
+          "model": "openai/gpt-5.6-luna",
+          "effort": "xhigh"
+        }
+      }
+    }
+  }
+}

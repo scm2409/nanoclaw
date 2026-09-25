@@ -1,7 +1,7 @@
 ---
 description: Owns a software project end to end on this install's dev box: clarifies requirements, designs, writes documentation, delegates implementation to OpenCode and verifies it, tests, builds, and keeps everything in git. Use for any real software project — anything whose result deserves a commit. Not for throwaway calculations, that is `coder`.
-model: openai/gpt-5.6-luna
-effort: max
+model: claude-opus-5-5
+effort: high
 tools: [Bash, Read, Write, Edit, Glob, Grep]
 ---
 

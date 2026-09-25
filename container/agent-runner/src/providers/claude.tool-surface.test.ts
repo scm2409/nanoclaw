@@ -14,9 +14,13 @@ import { describe, expect, it } from 'bun:test';
 import { SDK_DISALLOWED_TOOLS, TOOL_ALLOWLIST } from './claude.js';
 
 /**
- * Non-MCP tools the claude CLI (2.1.197) actually put on the wire, read out of
+ * Non-MCP tools the claude CLI (2.1.280) actually put on the wire, read out of
  * an llm-trace record rather than from documentation. Update this from a fresh
  * trace after a CLI bump — see docs/llm-trace.md.
+ *
+ * Read with SDK_DISALLOWED_TOOLS in force, so a disallowed tool is absent here
+ * by construction; the tools disallowed before 2.1.280 were observed on the
+ * wire under 2.1.197.
  */
 const OBSERVED_ON_THE_WIRE = [
   'Agent',
@@ -24,21 +28,20 @@ const OBSERVED_ON_THE_WIRE = [
   'Edit',
   'Glob',
   'Grep',
+  'ListAgents',
+  'Monitor',
   'NotebookEdit',
   'Read',
   'SendMessage',
   'Skill',
-  'TaskCreate',
-  'TaskGet',
-  'TaskList',
-  'TaskOutput',
   'TaskStop',
-  'TaskUpdate',
   'WebFetch',
   'WebSearch',
-  'Workflow',
   'Write',
 ];
+
+/** First on the wire with 2.1.280; they reach a phone or a cloud trigger that a container agent has neither of. */
+const NO_TARGET_IN_A_CONTAINER = ['PushNotification', 'RemoteTrigger'];
 
 /** Never used once in 7,513 recorded tool calls, and 30,031 characters between them. */
 const DEAD_WEIGHT = ['Workflow', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'];
@@ -50,11 +53,17 @@ describe('SDK_DISALLOWED_TOOLS', () => {
     }
   });
 
+  it('drops the tools that have nothing to reach from inside a container', () => {
+    for (const tool of NO_TARGET_IN_A_CONTAINER) {
+      expect(SDK_DISALLOWED_TOOLS).toContain(tool);
+    }
+  });
+
   it('keeps the delegation tools the agent actually depends on', () => {
-    // Agent runs every subagent (203 recorded calls); TaskOutput/TaskStop are
-    // how a background agent is read and cancelled. Disallowing these would
+    // Agent runs every subagent (203 recorded calls); ListAgents/SendMessage/TaskStop
+    // find, address and cancel a background agent. Disallowing these would
     // silently break delegation, which is the opposite of the saving.
-    for (const tool of ['Agent', 'TaskOutput', 'TaskStop']) {
+    for (const tool of ['Agent', 'ListAgents', 'SendMessage', 'TaskStop']) {
       expect(SDK_DISALLOWED_TOOLS).not.toContain(tool);
     }
   });

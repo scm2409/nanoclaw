@@ -49,6 +49,9 @@ If the NanoClaw OneCLI agent uses `secretMode: selective`, assign this secret to
 
 ## Select models
 
+To move between OpenRouter and another saved setup in one step, use
+`/switch-model-profile` instead of the manual steps below.
+
 Main group:
 
 ```bash

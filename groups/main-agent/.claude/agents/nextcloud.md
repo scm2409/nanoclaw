@@ -1,7 +1,7 @@
 ---
 description: Performs Nextcloud operations — Deck (boards, stacks, cards, comments), calendar (events, tasks) and WebDAV files. Use for EVERY Nextcloud action, read or write. The calling agent has no Nextcloud tools of its own.
-model: z-ai/glm-5.3-flash
-effort: medium
+model: claude-sonnet-5
+effort: low
 tools: [Read, Write, Skill]
 mcpServers: [nextcloud]
 skills: [nextcloud-deck-workflow, nextcloud-deck-inbox]

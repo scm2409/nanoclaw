@@ -1,0 +1,24 @@
+{
+  "description": "Anthropic API direct (from 2026-09-25): Claude Sonnet 5 for the main thread and executors, Claude Opus 5.5 for smart and software-engineer. No Haiku - Haiku 4.5 rejects the effort parameter.",
+  "anthropicBaseUrl": null,
+  "groups": {
+    "_matrix-live-test": {
+      "model": "claude-sonnet-5",
+      "effort": "low"
+    },
+    "main-agent": {
+      "model": "claude-sonnet-5",
+      "effort": "medium",
+      "subagents": {
+        "browser": { "model": "claude-sonnet-5", "effort": "low" },
+        "coder": { "model": "claude-sonnet-5", "effort": "low" },
+        "dokuwiki": { "model": "claude-sonnet-5", "effort": "low" },
+        "mealie": { "model": "claude-sonnet-5", "effort": "low" },
+        "nextcloud": { "model": "claude-sonnet-5", "effort": "low" },
+        "smart": { "model": "claude-opus-5-5", "effort": "high" },
+        "software-engineer": { "model": "claude-opus-5-5", "effort": "high" },
+        "websearch": { "model": "claude-sonnet-5", "effort": "high" }
+      }
+    }
+  }
+}

@@ -98,6 +98,9 @@ export function classifyRateLimitEvent(
 //   to-do list ("a structured task list for your current coding session").
 //   NanoClaw's own durable scheduling is `ncl tasks`, and there is no
 //   terminal here to render a progress list into. 8.7KB between them.
+// - PushNotification / RemoteTrigger (new in CLI 2.1.280): a phone push and a
+//   claude.ai cloud trigger. A container agent has neither a paired device nor
+//   a cloud account; it reaches people through NanoClaw's own channels.
 //
 // Workflow and the four Task list tools were measured, not guessed: across
 // 7,513 recorded tool calls in this install's whole history, they were used
@@ -119,6 +122,8 @@ export const SDK_DISALLOWED_TOOLS = [
   'TaskUpdate',
   'TaskList',
   'TaskGet',
+  'PushNotification',
+  'RemoteTrigger',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -146,9 +151,10 @@ export const TOOL_ALLOWLIST = [
   'Grep',
   'WebSearch',
   'WebFetch',
-  'TaskOutput',
   'TaskStop',
+  'ListAgents',
   'SendMessage',
+  'Monitor',
   'ToolSearch',
   'Skill',
   'NotebookEdit',
@@ -1068,8 +1074,14 @@ export class ClaudeProvider implements AgentProvider {
         additionalDirectories: this.additionalDirectories,
         resume,
         pathToClaudeCodeExecutable: '/pnpm/claude',
+        // The append (agent name + destinations) is rebuilt at every container
+        // start. Left to the SDK default, Claude Code (2.1.267+) records the
+        // prompt on a session's first request and resends that record on every
+        // resume, so a resumed agent would keep its old name and destination
+        // list until compaction. snapshot: false renders it fresh each time;
+        // the append carries no timestamps, so an unchanged one keeps the cache.
         systemPrompt: instructions
-          ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
+          ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions, snapshot: false }
           : undefined,
         // Streaming deltas are what keep the heartbeat ticking during a long
         // answer, and the heartbeat is what the host's typing indicator reads.
@@ -1088,6 +1100,11 @@ export class ClaudeProvider implements AgentProvider {
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user', 'local'],
+        // Flag-level settings outrank the group's own settings files. Since
+        // 2.1.275 Claude Code syncs the skills and plugins enabled on a signed-in
+        // claude.ai account into terminal sessions; an agent gets the skills
+        // NanoClaw mounts, not the operator's own.
+        settings: { syncClaudeAiSkills: false, syncClaudeAiPlugins: false },
         mcpServers: this.topLevelMcpServers,
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],

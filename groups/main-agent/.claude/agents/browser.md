@@ -1,6 +1,6 @@
 ---
 description: Drives a real browser (Chromium via the `agent-browser` CLI) for pages the `websearch` subagent cannot handle — content that only appears after JavaScript runs, cookie or consent walls, forms, configurators, calculators, logins, and screenshots or PDFs of a rendered page. Use when `websearch` reports it could not reach the content, or when the task plainly needs interaction rather than reading.
-model: z-ai/glm-5.3-flash
+model: claude-sonnet-5
 effort: low
 tools: [Bash, Read]
 skills: [agent-browser]

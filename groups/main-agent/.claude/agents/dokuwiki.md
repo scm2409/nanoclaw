@@ -1,7 +1,7 @@
 ---
 description: Reads and edits pages in the DokuWiki that runs behind a review-queue plugin — saving is not live but goes into a queue a human must approve. Use for EVERY DokuWiki action, read or write. The calling agent has no DokuWiki tools of its own.
-model: z-ai/glm-5.3-flash
-effort: medium
+model: claude-sonnet-5
+effort: low
 tools: [Read, Write, Skill]
 mcpServers: [dokuwiki]
 skills: [dokuwiki-reviewqueue]

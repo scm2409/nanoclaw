@@ -1,7 +1,7 @@
 ---
 description: Researches on the web and returns a condensed, sourced summary. Use for EVERY internet research — news, fact-checks, product info, documentation, current events. Also for multi-part research ("compare X and Y", "what's the status on Z").
-model: openai/gpt-5.6-luna
-effort: xhigh
+model: claude-sonnet-5
+effort: high
 tools: [WebSearch, WebFetch]
 ---
 
