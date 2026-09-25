@@ -27,6 +27,14 @@
  *                                 MSC3245 voice note (the exact shape Element
  *                                 produces in an E2EE room), under the name
  *                                 MATRIX_HARNESS_VOICE_NAME
+ *   MATRIX_HARNESS_CREATE_ENCRYPTED_ROOM — optional; when "1", creates a
+ *                                 fresh E2EE room, invites MATRIX_HARNESS_PEER_ID,
+ *                                 waits for the peer to join, force-saves the
+ *                                 sync store and reports ROOM_CREATED
+ *   MATRIX_HARNESS_PROBE_ROOM  — optional; post the probe into this room id
+ *                                 instead of resolving the peer's DM
+ *   MATRIX_HARNESS_LEAVE_ROOM  — optional; leave (and forget) this room once
+ *                                 synced, reporting ROOM_LEFT
  *   MATRIX_HARNESS_MAX_MS      — safety timeout before the harness exits on
  *                                 its own (default 90s)
  *
@@ -72,6 +80,9 @@ const { createMatrixAdapter } = await import('@beeper/chat-adapter-matrix');
 const { createChatSdkBridge } = await import('../src/channels/chat-sdk-bridge.js');
 const { wrapWithDmResolution, wrapWithEncryptedMedia } = await import('../src/channels/matrix.js');
 const { restoreSnapshot, saveSnapshot } = await import('../src/channels/matrix-crypto-store.js');
+const { wrapWithSyncStoreRepair } = await import('../src/channels/matrix-sync-store-repair.js');
+const { ensureOwnDeviceCrossSigned, wrapWithoutPlaintextSecretsBundle } =
+  await import('../src/channels/matrix-cross-signing.js');
 const { encryptMatrixAttachment } = await import('../src/channels/matrix-media-crypto.js');
 const { initDb } = await import('../src/db/connection.js');
 
@@ -85,7 +96,9 @@ const { initDb } = await import('../src/db/connection.js');
 initDb(path.join(PROJECT_ROOT, 'data', 'v2.db'));
 
 function emit(event: string, payload?: string): void {
-  process.stdout.write(`HARNESS:${event}${payload !== undefined ? ':' + Buffer.from(payload).toString('base64') : ''}\n`);
+  process.stdout.write(
+    `HARNESS:${event}${payload !== undefined ? ':' + Buffer.from(payload).toString('base64') : ''}\n`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -99,7 +112,9 @@ async function main(): Promise<void> {
     emit('RESTORE_THREW', String(err));
   }
 
-  const matrixAdapter = wrapWithDmResolution(wrapWithEncryptedMedia(createMatrixAdapter()));
+  const matrixAdapter = wrapWithDmResolution(
+    wrapWithEncryptedMedia(wrapWithoutPlaintextSecretsBundle(wrapWithSyncStoreRepair(createMatrixAdapter()))),
+  );
   const bridge = createChatSdkBridge({
     adapter: matrixAdapter,
     instance: 'matrix-live-test',
@@ -133,19 +148,78 @@ async function main(): Promise<void> {
 
   if ((matrixAdapter as unknown as { liveSyncReady?: boolean }).liveSyncReady) {
     emit('SYNC_READY');
+    // Not awaited, same as production: a test that kills the harness right
+    // after SYNC_READY must still reach the SIGTERM handler registered below.
+    void ensureOwnDeviceCrossSigned((matrixAdapter as unknown as { client?: unknown }).client).then((result) =>
+      emit('CROSS_SIGNING', result),
+    );
   } else {
     emit('SYNC_TIMEOUT');
   }
 
   const peerId = process.env.MATRIX_HARNESS_PEER_ID;
+  const client = (matrixAdapter as any).client;
+
+  const leaveRoom = process.env.MATRIX_HARNESS_LEAVE_ROOM;
+  if (leaveRoom) {
+    try {
+      await client.leave(leaveRoom);
+      await client.forget(leaveRoom);
+      emit('ROOM_LEFT', leaveRoom);
+    } catch (err) {
+      emit('ROOM_LEAVE_FAILED', String(err));
+    }
+  }
+
+  if (peerId && process.env.MATRIX_HARNESS_CREATE_ENCRYPTED_ROOM === '1') {
+    try {
+      // The DM rooms the suite otherwise reuses were created by openDM()
+      // WITHOUT encryption, so nothing there exercises E2EE. A fresh room
+      // with m.room.encryption in its initial state does.
+      const { room_id: roomID } = await client.createRoom({
+        preset: 'trusted_private_chat',
+        is_direct: true,
+        invite: [peerId],
+        initial_state: [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }],
+      });
+      const deadline = Date.now() + 60_000;
+      let joined = false;
+      while (Date.now() < deadline && !joined) {
+        const members = await client.getJoinedRoomMembers(roomID);
+        joined = Boolean(members?.joined?.[peerId]);
+        if (!joined) await new Promise((r) => setTimeout(r, 2_000));
+      }
+      if (!joined) throw new Error(`${peerId} did not join ${roomID} within 60s`);
+      // Give sync a moment to deliver the peer's join, then persist the
+      // sync store so the next process restores this room from disk.
+      await new Promise((r) => setTimeout(r, 5_000));
+      await client.store?.save?.(true);
+      emit('ROOM_CREATED', JSON.stringify({ roomID }));
+    } catch (err) {
+      emit('ROOM_CREATE_FAILED', String(err instanceof Error ? (err.stack ?? err.message) : err));
+    }
+  }
+
   const probeText = process.env.MATRIX_HARNESS_PROBE_TEXT;
-  if (peerId && probeText) {
+  const probeRoom = process.env.MATRIX_HARNESS_PROBE_ROOM;
+  if ((peerId || probeRoom) && probeText) {
     try {
       // Goes through the wrapped postMessage (resolveThreadId's fast-path
       // cache + openDM fallback) — the exact code path this whole test
       // suite exists to exercise against a real server.
-      const result = await matrixAdapter.postMessage(`matrix:${peerId}`, { markdown: probeText });
+      const target = probeRoom ? matrixAdapter.encodeThreadId({ roomID: probeRoom }) : `matrix:${peerId}`;
+      const result = await matrixAdapter.postMessage(target, { markdown: probeText });
       emit('PROBE_SENT', JSON.stringify(result ?? null));
+      // What actually went over the wire: an E2EE room must receive
+      // m.room.encrypted, never a plaintext m.room.message.
+      try {
+        const sent = result as { id?: string; threadId?: string } | null;
+        const { roomID } = matrixAdapter.decodeThreadId(sent?.threadId ?? '');
+        const raw = await client.fetchRoomEvent(roomID, sent?.id);
+        emit('PROBE_WIRE', JSON.stringify({ type: raw?.type, roomID }));
+      } catch (err) {
+        emit('PROBE_WIRE_FAILED', String(err));
+      }
     } catch (err) {
       emit('PROBE_FAILED', String(err));
     }
@@ -161,7 +235,6 @@ async function main(): Promise<void> {
       // Resolve the DM room the same way outbound delivery does.
       const resolvedThreadId = await (matrixAdapter as any).openDM(peerId);
       const { roomID } = matrixAdapter.decodeThreadId(resolvedThreadId);
-      const client = (matrixAdapter as any).client;
 
       // Encrypt-then-upload, exactly like a real client in an E2EE room:
       // the *ciphertext* goes to the media repo, the key material rides in

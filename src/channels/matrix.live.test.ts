@@ -270,6 +270,104 @@ describeIfCreds('Matrix live channel (real homeserver)', () => {
     await h2.killAndWaitExit();
   }, 550_000);
 
+  test('first send after restarting on an incomplete sync snapshot is encrypted and decryptable (2026-09-25)', async () => {
+    // Production incident: the persisted sync snapshot did not know the
+    // operator's encrypted DM properly (the live-test identity's snapshot
+    // even held no joined room at all next to its sync token). Resuming
+    // incrementally, the client has no Room object for such a room, and
+    // js-sdk sends into an unknown room WITHOUT encrypting — one reply went
+    // out as plaintext; the next shared its key with the bot's own devices
+    // only.
+    //
+    // The suite's usual DM rooms were created by openDM() without
+    // encryption, so this test makes its own encrypted room each run:
+    //   1. create it, the production bot joins, the room lands in the
+    //      persisted snapshot;
+    //   2. drop that room from the snapshot again;
+    //   3. restart and send FIRST — the probe must go over the wire as
+    //      m.room.encrypted, and the production bot must be able to decrypt
+    //      it, proven by its reply arriving in the same room.
+    // Verified to fail on the pre-fix code (plaintext m.room.message).
+    const h = new Harness({
+      MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR,
+      MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID,
+      MATRIX_HARNESS_PEER_ID: env.MATRIX_USER_ID,
+      MATRIX_HARNESS_CREATE_ENCRYPTED_ROOM: '1',
+    });
+    await h.waitFor('SYNC_READY', 90_000);
+    const created = await h.waitFor('ROOM_CREATED', 90_000);
+    const roomID = JSON.parse(created.payload ?? '{}').roomID as string;
+    expect(roomID).toMatch(/^!/);
+    await h.killAndWaitExit();
+
+    try {
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(path.join(PROJECT_ROOT, 'data/v2.db'));
+      const scope =
+        `matrix-live-test:matrix:store:${encodeURIComponent(env.MATRIX_BASE_URL!.replace(/\/+$/, ''))}` +
+        `:${encodeURIComponent(env.MATRIX_TEST_USER_ID!)}:${encodeURIComponent(MAIN_DEVICE_ID)}`;
+      const savedSyncKey = `${scope}:saved-sync`;
+      try {
+        const row = db.prepare('SELECT value FROM chat_sdk_kv WHERE key = ?').get(savedSyncKey) as
+          | { value: string }
+          | undefined;
+        expect(row, `no saved sync under ${savedSyncKey}`).toBeTruthy();
+        const snapshot = JSON.parse(row!.value);
+        expect(snapshot.roomsData.join[roomID], 'the new room never reached the persisted snapshot').toBeTruthy();
+        delete snapshot.roomsData.join[roomID];
+        db.prepare('UPDATE chat_sdk_kv SET value = ? WHERE key = ?').run(JSON.stringify(snapshot), savedSyncKey);
+      } finally {
+        db.close();
+      }
+
+      const probeText = `nanoclaw-live-incomplete-state-probe-${crypto.randomUUID()}`;
+      const h2 = new Harness({
+        MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR,
+        MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID,
+        MATRIX_HARNESS_PROBE_ROOM: roomID,
+        MATRIX_HARNESS_PROBE_TEXT: probeText,
+        MATRIX_HARNESS_MAX_MS: '320000',
+      });
+      await h2.waitFor('SYNC_READY', 90_000);
+      await h2.waitFor('PROBE_SENT', 60_000);
+      const wire = await h2.waitFor('PROBE_WIRE', 30_000);
+      expect(JSON.parse(wire.payload ?? '{}')).toEqual({ type: 'm.room.encrypted', roomID });
+
+      // Only a reply in this room counts; the homeserver back-fills
+      // unrelated history from other rooms during initial sync.
+      const inbound = await h2.waitForMatching(
+        'INBOUND',
+        (e) => roomOf((JSON.parse(e.payload ?? '{}') as { threadId?: string }).threadId) === roomID,
+        300_000,
+      );
+      expect(inbound.payload).toBeTruthy();
+      await h2.killAndWaitExit();
+    } finally {
+      // Don't let one room per run pile up on the test account.
+      const h3 = new Harness({
+        MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR,
+        MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID,
+        MATRIX_HARNESS_LEAVE_ROOM: roomID,
+      });
+      await h3.waitFor('ROOM_LEFT', 120_000).catch(() => undefined);
+      await h3.killAndWaitExit();
+    }
+  }, 700_000);
+
+  test('the device is cross-signed by its owner after startup', async () => {
+    const h = new Harness({ MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR, MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID });
+    await h.waitFor('SYNC_READY', 90_000);
+    const result = await h.waitFor('CROSS_SIGNING', 60_000);
+    expect(['signed', 'already-verified']).toContain(result.payload);
+    await h.killAndWaitExit();
+
+    // And it sticks across a restart without re-signing.
+    const h2 = new Harness({ MATRIX_CRYPTO_SNAPSHOT_DIR: MAIN_DIR, MATRIX_HARNESS_DEVICE_ID: MAIN_DEVICE_ID });
+    await h2.waitFor('SYNC_READY', 90_000);
+    expect((await h2.waitFor('CROSS_SIGNING', 60_000)).payload).toBe('already-verified');
+    await h2.killAndWaitExit();
+  }, 300_000);
+
   test('encrypted voice note: production bot transcribes it', async () => {
     // Sends a real MSC3245 voice note — attachment encrypted with
     // AES-256-CTR exactly like Element does in an E2EE room — to the live

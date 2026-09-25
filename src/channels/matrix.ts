@@ -57,6 +57,8 @@ import { createChatSdkBridge } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
 import { loadDmRooms, saveDmRoom, deleteDmRoom } from './matrix-dm-room-store.js';
 import { restoreSnapshot, saveSnapshot } from './matrix-crypto-store.js';
+import { wrapWithSyncStoreRepair } from './matrix-sync-store-repair.js';
+import { ensureOwnDeviceCrossSigned, wrapWithoutPlaintextSecretsBundle } from './matrix-cross-signing.js';
 import { decryptMatrixAttachment, isEncryptedFile } from './matrix-media-crypto.js';
 
 /** How often the crypto store autosaves, in addition to save-on-shutdown —
@@ -107,6 +109,142 @@ function matrixIsVoiceAttachment(_att: Record<string, any>, raw: Record<string, 
 }
 
 /**
+ * Thrown instead of letting a message go out as plaintext into a room that
+ * is encrypted server-side but that the local client can't (yet) encrypt
+ * for. A refused send surfaces as a delivery failure the host retries; a
+ * plaintext send into an E2EE room can never be taken back.
+ */
+export class MatrixEncryptionNotReadyError extends Error {
+  constructor(roomId: string, reason: string) {
+    super(`Matrix: refusing to send plaintext into encrypted room ${roomId} (${reason})`);
+    this.name = 'MatrixEncryptionNotReadyError';
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isNotFoundError(err: any): boolean {
+  return err?.errcode === 'M_NOT_FOUND' || err?.httpStatus === 404 || /M_NOT_FOUND/.test(String(err?.message ?? ''));
+}
+
+/**
+ * Make sure a send into `roomId` will be encrypted, and for every member —
+ * called right before each outbound send.
+ *
+ * Two layers of local state decide how js-sdk encrypts, and a restored sync
+ * snapshot can leave both incomplete:
+ *
+ * 1. The olm encryptor. matrix-js-sdk only registers it when the room's
+ *    `m.room.encryption` state event arrives *inside a sync response*
+ *    (sync.js → `cryptoCallbacks.onCryptoEvent`). An INCREMENTAL sync — what
+ *    happens whenever a persisted sync snapshot is restored at startup — never
+ *    re-sends unchanged state, so every send failed with "Cannot encrypt event
+ *    in unconfigured room <id>" (2026-07-25 incident).
+ *
+ * 2. The room's own local state. On 2026-09-25 the persisted snapshot held only
+ *    the two m.room.member events for the operator's DM — no m.room.create, no
+ *    m.room.encryption. js-sdk decides "encrypt at all?" from that local state
+ *    (plus olm room settings), so one send went out as PLAINTEXT. And
+ *    Room.loadMembers() only force-fetches the member list from the server for
+ *    rooms whose local state carries m.room.encryption; otherwise it trusts the
+ *    cached lazy-loaded member list — which was stale, so the next (encrypted)
+ *    send shared its megolm key with the bot's own devices only and the
+ *    operator's client could not decrypt it until they wrote first.
+ *
+ * The repair: when local state lacks the event, ask the homeserver
+ * (authoritative; 404 = genuinely unencrypted), inject the event into local
+ * state, reload the member list from the server, and register the encryptor.
+ * Fails closed: if the room is encrypted but can't be made ready, throw
+ * MatrixEncryptionNotReadyError instead of letting the send go out as
+ * plaintext. Everything else is best-effort and never throws.
+ */
+export async function ensureEncryptorForRoom(
+  adapter: ReturnType<typeof createMatrixAdapter>,
+  roomId: string,
+  opts: { roomWaitMs?: number; pollMs?: number } = {},
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = (adapter as any).client;
+  const crypto = client?.getCrypto?.();
+  if (!client || typeof crypto?.onCryptoEvent !== 'function') return;
+
+  let room = client.getRoom?.(roomId);
+  let event = room?.currentState?.getStateEvents?.('m.room.encryption', '');
+
+  // Fast path: local state already knows the room is encrypted and the
+  // encryptor exists — nothing to repair, no server round-trip.
+  if (event && crypto.roomEncryptors?.[roomId]) return;
+
+  if (!event) {
+    // The local room store can lack state the server has — a restored
+    // snapshot with incomplete state (see above), or the lazy-hydration gap
+    // between timeline and state processing (2026-07-26). Ask the server.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let content: any = null;
+    try {
+      content = await client.getStateEvent?.(roomId, 'm.room.encryption', '');
+    } catch (err) {
+      if (isNotFoundError(err)) return; // genuinely unencrypted
+      throw new MatrixEncryptionNotReadyError(roomId, `encryption state unknown: ${String(err)}`);
+    }
+    if (!content) return;
+
+    if (!room) {
+      // Right after a restart a fresh initial sync can still miss a room the
+      // server already has — seen live on matrix.org, the room arrived one
+      // sync later. Wait for it rather than burn the host's quick delivery
+      // retries on an immediate refusal.
+      const deadline = Date.now() + (opts.roomWaitMs ?? 30_000);
+      while (!room && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, opts.pollMs ?? 1_000));
+        room = client.getRoom?.(roomId);
+      }
+      if (!room) throw new MatrixEncryptionNotReadyError(roomId, 'room not loaded in the client');
+      event = room.currentState?.getStateEvents?.('m.room.encryption', '');
+    }
+
+    if (!event) {
+      try {
+        const mapper = client.getEventMapper?.();
+        const raw = {
+          type: 'm.room.encryption',
+          state_key: '',
+          content,
+          room_id: roomId,
+          sender: client.getUserId?.() ?? '',
+          event_id: `$nanoclaw-local-encryption-${roomId}`,
+          origin_server_ts: Date.now(),
+        };
+        event = mapper ? mapper(raw) : { getContent: () => content };
+        room.currentState?.setStateEvents?.([event]);
+      } catch (err) {
+        log.warn('Matrix: could not inject encryption state into room', { roomId, err });
+      }
+      if (!room.hasEncryptionStateEvent?.()) {
+        throw new MatrixEncryptionNotReadyError(roomId, 'local room state could not be repaired');
+      }
+
+      // Now that the room reads as encrypted, js-sdk fetches the member list
+      // from the server instead of trusting the stale cached one.
+      try {
+        await room.clearLoadedMembersIfNeeded?.();
+        await room.loadMembersIfNeeded?.();
+      } catch (err) {
+        log.warn('Matrix: could not reload room members from server', { roomId, err });
+      }
+      log.info('Matrix: repaired missing encryption state before send', { roomId });
+    }
+  }
+
+  if (crypto.roomEncryptors?.[roomId]) return;
+  try {
+    await crypto.onCryptoEvent(room, event);
+    log.info('Matrix: registered missing room encryptor before send', { roomId });
+  } catch (err) {
+    log.warn('Matrix: could not ensure room encryptor', { roomId, err });
+  }
+}
+
+/**
  * Register a crypto encryptor for every joined room that has encryption
  * enabled, so outbound messages can be encrypted regardless of how the
  * client synced.
@@ -125,8 +263,9 @@ function matrixIsVoiceAttachment(_att: Record<string, any>, raw: Record<string, 
  * sync snapshot, the operator's live DM room could not be replied to at all
  * — the agent's answer was generated, retried three times, and dropped.
  *
- * Room state itself IS restored from the snapshot, so the fix is to walk the
- * restored rooms and drive the same callback the sync loop would have.
+ * The fix is to walk the restored rooms and drive the same callback the sync
+ * loop would have. A room whose restored state lacks m.room.encryption
+ * altogether is skipped here and repaired per send by ensureEncryptorForRoom.
  * Idempotent: `onCryptoEvent` updates an existing encryptor rather than
  * duplicating it, so re-running this (or running it on a client that synced
  * fully) is harmless.
@@ -134,50 +273,6 @@ function matrixIsVoiceAttachment(_att: Record<string, any>, raw: Record<string, 
  * Best-effort by design — never throws. A failure here leaves exactly
  * today's behavior, so it can't turn a working start into a broken one.
  */
-export async function ensureEncryptorForRoom(
-  adapter: ReturnType<typeof createMatrixAdapter>,
-  roomId: string,
-): Promise<void> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const client = (adapter as any).client;
-    const crypto = client?.getCrypto?.();
-    if (!client || typeof crypto?.onCryptoEvent !== 'function') return;
-
-    // Already registered — nothing to do. Reading the backend's internal map
-    // keeps the common case free; if the field ever disappears we fall
-    // through to onCryptoEvent, which is idempotent anyway.
-    if (crypto.roomEncryptors?.[roomId]) return;
-
-    const room = client.getRoom?.(roomId);
-    if (!room) return;
-
-    let event = room.currentState?.getStateEvents?.('m.room.encryption', '');
-    if (!event) {
-      // The local room store's currentState can lag real server-side state —
-      // same lazy-hydration gap as resolveThreadId's membership check
-      // (state application and timeline-event processing are separate
-      // pipelines). This isn't the hot path — it only runs after the free
-      // local check already came up empty — so ask the homeserver directly
-      // rather than give up: authoritative, no local-cache staleness
-      // possible. A 404 here means the room genuinely isn't encrypted.
-      let content: Record<string, unknown> | null = null;
-      try {
-        content = await client.getStateEvent?.(roomId, 'm.room.encryption', '');
-      } catch {
-        content = null;
-      }
-      if (!content) return;
-      event = { getContent: () => content };
-    }
-
-    await crypto.onCryptoEvent(room, event);
-    log.info('Matrix: registered missing room encryptor before send', { roomId });
-  } catch (err) {
-    log.warn('Matrix: could not ensure room encryptor', { roomId, err });
-  }
-}
-
 export async function ensureRoomEncryptors(adapter: ReturnType<typeof createMatrixAdapter>): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -658,13 +753,15 @@ export function wrapWithDmResolution(adapter: ReturnType<typeof createMatrixAdap
     // reported ready — observed in production as encryptedRooms=0 on a start
     // that later had several encrypted rooms. Without this, that gap surfaces
     // as a permanent "Cannot encrypt event in unconfigured room" delivery
-    // failure. No-ops once the encryptor exists.
+    // failure. No-ops once the encryptor exists. A MatrixEncryptionNotReadyError
+    // from it propagates on purpose: better a failed delivery than plaintext.
+    let targetRoomId: string | undefined;
     try {
-      const { roomID } = adapter.decodeThreadId(resolvedTid);
-      await ensureEncryptorForRoom(adapter, roomID);
+      targetRoomId = adapter.decodeThreadId(resolvedTid).roomID;
     } catch {
       // Undecodable thread id — let the underlying send surface the error.
     }
+    if (targetRoomId) await ensureEncryptorForRoom(adapter, targetRoomId);
     try {
       return await origPostMessage(resolvedTid, ...args);
     } catch (err) {
@@ -750,7 +847,9 @@ registerChannelAdapter('matrix', {
       process.env.MATRIX_INVITE_AUTOJOIN = 'true';
     }
 
-    const matrixAdapter = wrapWithDmResolution(wrapWithEncryptedMedia(createMatrixAdapter()));
+    const matrixAdapter = wrapWithDmResolution(
+      wrapWithEncryptedMedia(wrapWithoutPlaintextSecretsBundle(wrapWithSyncStoreRepair(createMatrixAdapter()))),
+    );
     const bridge = createChatSdkBridge({
       adapter: matrixAdapter,
       concurrency: 'concurrent',
@@ -825,6 +924,12 @@ registerChannelAdapter('matrix', {
       // starts delivering, so the first outbound message after a restart
       // already has a usable encryptor.
       await ensureRoomEncryptors(matrixAdapter);
+
+      // Sign this device with the account's cross-signing identity so
+      // clients stop flagging every bot message as "not verified by its
+      // owner". Not awaited: network-bound, best-effort, and nothing about
+      // delivery depends on it.
+      void ensureOwnDeviceCrossSigned((matrixAdapter as unknown as { client?: unknown }).client);
 
       // Persist the crypto store going forward: on a timer (bounds data loss
       // on an unclean exit that skips the shutdown hook below) and once more

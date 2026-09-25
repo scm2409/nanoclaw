@@ -721,3 +721,31 @@ describe('wrapWithDmResolution — DM room resolution', () => {
     expect(openDM).not.toHaveBeenCalled();
   });
 });
+
+describe('wrapWithDmResolution — never sends plaintext into an encrypted room (2026-09-25 incident)', () => {
+  it('refuses the send when the room is encrypted server-side but local state cannot be repaired', async () => {
+    const { adapter, postMessage } = makeFakeAdapter(
+      BOT_ID,
+      {
+        '!enc:example.org': {
+          id: '!enc:example.org',
+          joinedCount: 2,
+          membership: 'join',
+          otherMember: '@user1:example.org',
+        },
+      },
+      '!unused:example.org',
+    );
+    // Crypto backend present, homeserver says the room is encrypted, but the
+    // fake local room has no way to take the injected state event — the
+    // shape of a restored snapshot that lost the room's m.room.encryption.
+    const client = (adapter as unknown as { client: Record<string, unknown> }).client;
+    client.getCrypto = () => ({ onCryptoEvent: vi.fn(), roomEncryptors: {} });
+    client.getStateEvent = vi.fn(async () => ({ algorithm: 'm.megolm.v1.aes-sha2' }));
+
+    const wrapped = wrapWithDmResolution(adapter);
+
+    await expect(wrapped.postMessage('!enc:example.org', { markdown: 'secret' })).rejects.toThrow(/plaintext/i);
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+});

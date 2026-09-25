@@ -11,6 +11,71 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-25 — Matrix: first message after a restart is decryptable again, bot device is cross-signed
+
+Two things bothered the operator in Element X. After a host restart, the
+bot's first message could not be decrypted until the operator wrote first.
+And every bot message was marked "Encrypted by a device not verified by its
+owner".
+
+The restart problem came from the adapter's persisted sync snapshot. It did
+not know the operator's encrypted DM properly. The DM was missing from it,
+or present with only its two membership events: no `m.room.create`, no
+`m.room.encryption`. The live-test identity's snapshot held no joined room
+at all next to a valid sync token. On restart the client resumes
+incrementally from that token, and an incremental sync only carries what
+changed, so the gap never closed. Two failures followed, both in the log:
+- One reply went out as a **plaintext** `m.room.message` into the encrypted
+  room: js-sdk sends into a room it has no `Room` object for without
+  encrypting it.
+- The next reply was encrypted, but its room key went only to the bot's own
+  devices, because the member list the client knew was stale.
+
+Changes:
+- **Before each send**, `ensureEncryptorForRoom` asks the homeserver when
+  local state lacks `m.room.encryption`. If the room is not loaded yet, it
+  waits up to 30 s for sync to deliver it (after a restart matrix.org's
+  initial sync was seen to miss a freshly created room). It then injects the
+  encryption event into local state, reloads the member list from the
+  server, and registers the encryptor. It **fails closed**: an encrypted
+  room that cannot be made ready gets its send refused
+  (`MatrixEncryptionNotReadyError`), never a plaintext message.
+- **At startup**, `matrix-sync-store-repair.ts` discards the snapshot, the
+  sync token and the cached member lists in four cases: the homeserver's
+  `/joined_rooms` lists a room the snapshot lacks, the snapshot knows no
+  joined room, a joined room lacks `m.room.create`, or only the token
+  survived. The client then does a fresh initial sync with full state. The
+  check hooks into the adapter's own store creation, so it uses the
+  adapter's credentials and state namespace. Messages from that initial sync
+  are not processed again: the per-session message id already exists.
+- **At startup**, `matrix-cross-signing.ts` signs the bot's device with the
+  account's existing cross-signing keys. It uses the locally cached keys, or
+  imports them from secret storage with `MATRIX_RECOVERY_KEY`. When the keys
+  are in neither place it does nothing, because `bootstrapCrossSigning`
+  would then mint a new identity and void the operator's verifications.
+- **No plaintext key copy.** Once the device holds the cross-signing keys,
+  the adapter would write them as a plaintext "secrets bundle" into
+  `data/v2.db`. That write is now replaced by a removal. The keys stay in
+  the crypto snapshot, which is encrypted with the recovery key, and in
+  server-side secret storage.
+
+The live suite turned out never to have tested E2EE: every test DM the bot
+shares with the test account was created by `openDM()` without encryption.
+The new live test creates a fresh encrypted room each run, drops it from the
+persisted snapshot, restarts, and sends first. On the pre-fix code the probe
+went out as plaintext `m.room.message`. With the fix it goes out as
+`m.room.encrypted`, and the production bot decrypts it and replies. A second
+live test checks that the device is cross-signed and stays signed across a
+restart. The harness now reports the event type that went over the wire and
+the cross-signing result, and no longer blocks its SIGTERM handler on the
+signing.
+
+Old sessions on the bot account could not be removed from here: matrix.org
+now uses the Matrix Authentication Service, and `/delete_devices` answers
+`M_UNRECOGNIZED`.
+
+vibecoded with Claude Opus 5.5
+
 ## 2026-09-25 — KaiL01's engineer defaults to Claude Code on the dev box
 
 KaiL01's standing instructions for the `software-engineer` subagent named
