@@ -11,6 +11,20 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-25 — KaiL01's engineer defaults to Claude Code on the dev box
+
+KaiL01's standing instructions for the `software-engineer` subagent named
+OpenCode as the dev box's only coding tool. Martin switched the default to
+Claude Code. The instructions now say so: OpenCode stays installed as the
+fallback, and switching back is Martin's call alone. A stranded or
+limit-hit Claude Code run is reported, never quietly rerouted. The rules
+for mandates and for the build/test loop now name "the coding tool" instead
+of OpenCode, so they apply to both. A new rule keeps mandates, logs,
+reports and session ids out of the dev box's `/tmp`. It is tmpfs, and a
+reboot has already lost work there.
+
+vibecoded with Claude Opus 5.5
+
 ## 2026-09-25 — a refused tool call tells the agent why
 
 KaiL01 reported that "every send_message call" was blocked with nothing but
