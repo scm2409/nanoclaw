@@ -101,6 +101,8 @@ describe('Agent calls default to the background', () => {
       tool_input: {},
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((out as any).decision).toBe('block');
+    expect((out as any).hookSpecificOutput.permissionDecision).toBe('deny');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((out as any).hookSpecificOutput.updatedInput).toBeUndefined();
   });
 });

@@ -668,14 +668,28 @@ export function misdirectedSendMessage(
   );
 }
 
+/**
+ * Refuse a tool call with a reason the model actually reads. The reason has to
+ * travel as `permissionDecisionReason`: a `decision: 'block'` + `stopReason`
+ * pair reaches the model only as "Hook PreToolUse:<tool> denied this tool", so
+ * on 2026-09-25 KaiL01 hit the misdirected-SendMessage refusal four times
+ * without ever learning which tool would have worked.
+ */
+function denyTool(reason: string) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse' as const,
+      permissionDecision: 'deny' as const,
+      permissionDecisionReason: reason,
+    },
+  } as unknown as ReturnType<HookCallback>;
+}
+
 export const preToolUseHook: HookCallback = async (input) => {
   const i = input as { tool_name?: string; tool_input?: Record<string, unknown> };
   const toolName = i.tool_name ?? '';
   if (SDK_DISALLOWED_TOOLS.includes(toolName)) {
-    return {
-      decision: 'block',
-      stopReason: `Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`,
-    } as unknown as ReturnType<HookCallback>;
+    return denyTool(`Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`);
   }
   // Bash exposes its timeout via the tool_input.timeout field (ms). Any other
   // tool: no declared timeout.
@@ -697,7 +711,7 @@ export const preToolUseHook: HookCallback = async (input) => {
   });
   if (misdirected) {
     log(`PreToolUse: blocked misdirected SendMessage — ${misdirected}`);
-    return { decision: 'block', stopReason: misdirected } as unknown as ReturnType<HookCallback>;
+    return denyTool(misdirected);
   }
 
   const background = forceBackgroundAgent(toolName, i.tool_input);

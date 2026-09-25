@@ -11,6 +11,28 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-25 — a refused tool call tells the agent why
+
+KaiL01 reported that "every send_message call" was blocked with nothing but
+`Hook PreToolUse:SendMessage denied this tool`. It was not the MCP
+`send_message` tool: KaiL01 had called the built-in `SendMessage` (which only
+reaches subagents) with a delivery destination as the target, and the
+misdirected-SendMessage guard from 2026-09-15 refused it, as intended. But the
+guard's explanation ("send it with the send_message tool instead") never reached
+the model. `preToolUseHook` returned it as `decision: 'block'` + `stopReason`,
+and the SDK passes only a generic denial to the model. The agent retried the
+same wrong call four times, then went looking for a broken hook. The unit test
+checked `stopReason`, so it passed without showing that the agent ever saw the
+text.
+
+Both refusals in the hook (a misdirected `SendMessage` and a tool on
+`SDK_DISALLOWED_TOOLS`) now return `hookSpecificOutput.permissionDecision:
+'deny'` with the text in `permissionDecisionReason`, which is the field the
+model reads. Verified live: the agent received the full reason as the tool
+result and moved to `send_message` without being told.
+
+vibecoded with Claude Opus 5.5
+
 ## 2026-09-25 — token and subagent notices reach Matrix again
 
 No token summary reached KaiL01's Matrix room after 2026-09-20. A container's

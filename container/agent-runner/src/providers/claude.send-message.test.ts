@@ -50,10 +50,15 @@ describe('preToolUseHook — misdirected SendMessage', () => {
       { tool_name: 'SendMessage', tool_input: { to: 'matrix-mg-17844', message: 'decisive finding' } },
       undefined as never,
       { signal: new AbortController().signal },
-    )) as { decision?: string; stopReason?: string };
+    )) as {
+      hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string; permissionDecisionReason?: string };
+    };
 
-    expect(out.decision).toBe('block');
-    expect(out.stopReason).toContain('send_message');
+    // permissionDecisionReason is the field the model sees; stopReason never
+    // reached it, so the agent only got "Hook PreToolUse:SendMessage denied this tool".
+    expect(out.hookSpecificOutput?.hookEventName).toBe('PreToolUse');
+    expect(out.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('send_message');
   });
 
   it('lets a subagent message through', async () => {
