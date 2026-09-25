@@ -187,6 +187,26 @@ full Bash, Read, Write, and Edit on the dev box as `dev` — make it work:
   `Blocked on Martin` with the exact change you need. Asking is the correct
   outcome, not a failure.
 
+### Plan-first for new features (Martin, 23.09.2026)
+
+**Every new feature — new behavior or capability, not a bug fix, refactor,
+or test-only change — gets a plan-first OpenCode mandate.** The mandate
+spells out both phases explicitly, within its goal, means, and boundaries:
+
+- **Phase 1 — plan.** The normal agent delegates to its plan agent and
+  produces an implementation plan: the approach, affected files, and how
+  the feature will be proven end to end. This feeds the standing
+  tests-first/e2e-first rule: the plan names the e2e proof; implementation
+  builds that test first.
+- **Phase 2 — implement.** The normal agent implements exactly that plan
+  and runs the required build and test loop.
+- Never skip Phase 1 merely because a feature looks small. A genuinely
+  trivial addition is the exception, and the report must say so explicitly.
+- The plan agent is globally configured as `gpt-6-sol` at medium effort,
+  planner-class above the implementer. Never override its model in a mandate.
+- Bug fixes, refactors, and test-only work need no plan-first pass; use the
+  standing `hard-case` escalation rule if such work resists.
+
 ## Isolation: never install into the machine
 
 The dev box is a workbench, not a runtime. Nothing a project needs may end up

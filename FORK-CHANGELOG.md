@@ -11,6 +11,19 @@ the entry format and how this file is kept up to date.
 
 ---
 
+## 2026-09-23 — software-engineer: plan-first mandates for new features
+
+The `software-engineer` subagent now gives every new feature a two-phase
+OpenCode mandate: OpenCode's plan agent first writes an implementation plan
+(approach, affected files, and the end-to-end proof, which the standing
+tests-first rule then builds first), and only then does the normal agent
+implement exactly that plan. Bug fixes, refactors and test-only work skip the
+plan phase; a genuinely trivial feature may too, but the report has to say so.
+The plan agent's model is set globally on the dev box and is never overridden
+in a mandate.
+
+vibecoded with Claude Opus 5.5 (this entry; the rule text was written before this session)
+
 ## 2026-09-20 — the auto-mode classifier gets its own model
 
 `claude_openrouter.py` pointed `ANTHROPIC_DEFAULT_SONNET_MODEL` at the main
